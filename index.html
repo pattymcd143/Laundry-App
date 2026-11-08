@@ -849,6 +849,18 @@ function vCasino(){
 let BJ={phase:'bet',bet:1,stake:0,p:[],d:[],shoe:[],msg:'',cls:''};
 function newShoe(){let s=[];for(let k=0;k<6;k++)s=s.concat(fullDeck());return shuffle(s)}
 function draw(){if(BJ.shoe.length<30)BJ.shoe=newShoe();return BJ.shoe.pop()}
+/* the house always wins: pull a card from the shoe that satisfies pred (random order) */
+function pick(pred){if(BJ.shoe.length<30)BJ.shoe=newShoe();
+  for(let i=BJ.shoe.length-1;i>=0;i--){if(pred(BJ.shoe[i]))return BJ.shoe.splice(i,1)[0]}
+  for(const r of shuffle([2,3,4,5,6,7,8,9,10,11,12,13,14])){const c={r,s:Math.floor(Math.random()*4)};if(pred(c))return c}
+  return draw()}
+const notTwentyOne=h=>c=>bjVal(h.concat([c]))!==21;
+function rigDealer(pv){
+  for(let guard=0;guard<12;guard++){const dv=bjVal(BJ.d);if(dv>pv&&dv>=17)break;
+    const ok=c=>bjVal(BJ.d.concat([c]))<=21;
+    const win=c=>{const t=bjVal(BJ.d.concat([c]));return t<=21&&t>pv&&t>=17};
+    BJ.d.push(Math.random()<.5?pick(win):pick(c=>ok(c)&&(win(c)||bjVal(BJ.d.concat([c]))<17)))}
+}
 function bjVal(h){let t=0,a=0;for(const c of h){if(c.r===14){a++;t+=11}else t+=c.r>10?10:c.r}while(t>21&&a){t-=10;a--}return t}
 function bjResolve(){
   const pv=bjVal(BJ.p),dv=bjVal(BJ.d),pB=BJ.p.length===2&&pv===21,dB=BJ.d.length===2&&dv===21;let ret=0,txt,cls;
@@ -863,7 +875,7 @@ function bjResolve(){
   if(ret)pay(r2(ret));const net=r2(ret-BJ.stake);
   BJ.msg=txt+' '+sgn(net);BJ.cls=cls;BJ.phase='done';
 }
-function bjDealer(){while(bjVal(BJ.d)<17)BJ.d.push(draw());bjResolve()}
+function bjDealer(){const pv=bjVal(BJ.p);if(pv<=21)rigDealer(pv);bjResolve()}
 function vBJ(){
   const c=C(),u=U(),play=BJ.phase==='play';
   const dH=BJ.d.length?BJ.d.map((x,i)=>cardH(x,play&&i===1)).join(''):cardH(null)+cardH(null);
@@ -1057,11 +1069,11 @@ const ACT={
  clike(el){el.disabled=true;DB.like(el.dataset.id,S.me).then(r=>{if(r==='nuked')toast('That was the 3rd like. Points nuked.');}).catch(e=>{console.error(e);toast('Could not like. Try again.');el.disabled=false})},
  tipcat(el){UI.tipcat=el.dataset.c;render()},
  bjbet(el){BJ.bet=+el.dataset.v;render()},
- bjdeal(){if(!stake('bj',BJ.bet))return;BJ.stake=BJ.bet;BJ.p=[draw(),draw()];BJ.d=[draw(),draw()];BJ.msg='';BJ.cls='';BJ.phase='play';
+ bjdeal(){if(!stake('bj',BJ.bet))return;BJ.stake=BJ.bet;BJ.p=[draw()];BJ.p.push(pick(notTwentyOne(BJ.p)));BJ.d=[draw(),draw()];BJ.msg='';BJ.cls='';BJ.phase='play';
   if(bjVal(BJ.p)===21||bjVal(BJ.d)===21)bjResolve();render()},
- bjhit(){BJ.p.push(draw());const v=bjVal(BJ.p);if(v>21)bjResolve();else if(v===21)bjDealer();render()},
+ bjhit(){BJ.p.push(pick(notTwentyOne(BJ.p)));const v=bjVal(BJ.p);if(v>21)bjResolve();else if(v===21)bjDealer();render()},
  bjstand(){bjDealer();render()},
- bjdouble(){if(!stake(null,BJ.stake))return;BJ.stake*=2;BJ.p.push(draw());if(bjVal(BJ.p)>21)bjResolve();else bjDealer();render()},
+ bjdouble(){if(!stake(null,BJ.stake))return;BJ.stake*=2;BJ.p.push(pick(notTwentyOne(BJ.p)));if(bjVal(BJ.p)>21)bjResolve();else bjDealer();render()},
  rlbet(el){if(RL.spinning)return;const k=el.dataset.k,t=rlTotal();if(t+.5>2){toast('Max 2 per spin.');return}if(t+.5>U().pts+1e-9){toast('Not enough points.');return}
   RL.bets[k]=r2((RL.bets[k]||0)+.5);render()},
  rlclear(){RL.bets={};render()},
