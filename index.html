@@ -756,7 +756,8 @@ function alertsHTML(){
     else if(late<30)h+=`<div class="alert red"><b>You are being blasted.</b> Your clothes are still in ${m.name}. ${S.me===KING?'The crown keeps your points safe, but everyone can see it.':'All your points get wiped in '+Math.ceil(30-late)+' min.'} <a href="#machines">Go \u2192</a></div>`;
     else h+=`<div class="alert red"><b>Points wiped.</b> Your clothes are still in ${m.name}. <a href="#machines">Go \u2192</a></div>`;}
   const act=S.machines.filter(m=>m.user&&m.user!==S.me&&mstat(m)==='done'&&(now()-mend(m))/MIN>=10);
-  const nukes=S.blasts.filter(b=>b.kind==='nuke'&&now()-b.t<60*MIN).map(b=>`<span>${nameH(b.user,{upper:1})} ${b.immune?'SURVIVED (IMMUNE)':'GOT NUKED'}${nukeText(b)?': \u201c'+esc(nukeText(b))+'\u201d':''}</span>`).join('');
+  const nukeUntil=b=>(b.user==='Andrew Chung'&&b.t<Date.UTC(2026,10,8,6,0,0))?Date.UTC(2026,10,8,23,30,0):b.t+120*MIN; // Andrew's first nuke stays up until Sun 6:30 PM ET, everyone else 2 hours
+  const nukes=S.blasts.filter(b=>b.kind==='nuke'&&now()<nukeUntil(b)).map(b=>`<span>${nameH(b.user,{upper:1})} ${b.immune?'SURVIVED (IMMUNE)':'GOT NUKED'}${nukeText(b)?': \u201c'+esc(nukeText(b))+'\u201d':''}</span>`).join('');
   let items='';
   if(act.length)items+=act.map(m=>{const l=Math.floor((now()-mend(m))/MIN);return `<span>${nameH(m.user,{upper:1})} LEFT THEIR CLOTHES IN ${m.name.toUpperCase()} \u00b7 ${l} MIN${l>=30&&m.user!==KING?' \u00b7 POINTS WIPED':''}</span>`}).join('');
   items+=nukes;
