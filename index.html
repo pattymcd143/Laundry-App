@@ -474,12 +474,17 @@ function save(){try{localStorage.setItem(LKEY,JSON.stringify({me:S.me,casino:S.c
 const U=()=>S.users[S.me];
 
 /* points: local deltas are batched and flushed every few seconds; everyone's points are polled once a minute */
-let serverPts={},pending=0,inflight=0,completed=0,flushing=false,pendingClicks=0,snapClicks=0,snapHist=[],lastClick=0,snapWatched=false;
+/* sync budget: points+clicks save in ONE write every 30s; everyone's points refresh every 60s (visible tabs only) */
+const FLUSH_MS=30000,POLL_MS=60000;
+let serverPts={},serverClicks={},pending=0,inflight=0,completed=0,flushing=false,pendingClicks=0,inflClicks=0,compClicks=0,
+    snapClicks=0,snapHist=[],lastClick=0,snapWatched=false,lastPoll=0;
+try{lastClick=+localStorage.getItem('zbt-lastclick')||0}catch(e){}
 function recompute(){
   for(const b of BROS)S.users[b].pts=serverPts[b]||0;
-  if(S.me){S.users[S.me].pts=r2((serverPts[S.me]||0)+pending+inflight);S.clicks[S.me]=snapClicks+pendingClicks;
-    S.watched[S.me]=(snapWatched||pendingClicks>0)?['house1']:[];
-    const h=snapHist.slice();const c=snapClicks+pendingClicks;
+  if(S.me){S.users[S.me].pts=r2((serverPts[S.me]||0)+pending+inflight);
+    const c=snapClicks+(serverClicks[S.me]||0)+pendingClicks+inflClicks;S.clicks[S.me]=c;
+    S.watched[S.me]=(snapWatched||c>0)?['house1']:[];
+    const h=snapHist.slice();
     if(c>0)h.push({t:lastClick||now(),title:'Video',sub:`Clicked \u201cI watched it\u201d ${c} time${c===1?'':'s'}`,d:c,tag:'WATCHED',c:'b'});
     S.users[S.me].hist=h.sort((a,b)=>b.t-a.t)}
 }
@@ -487,14 +492,16 @@ function addDelta(d){pending=r2(pending+d);recompute()}
 function addPts(d,title,sub,tag,c){addDelta(d);const e={t:now(),title,sub,d,tag,c};snapHist.unshift(e);recompute();DB.histAdd(S.me,e).catch(err=>console.error(err))}
 async function flush(){
   if(flushing||!S.me||!READY||(!pending&&!pendingClicks))return;flushing=true;
-  const d=pending,c=pendingClicks,me=S.me;pending=0;pendingClicks=0;inflight=r2(inflight+d);snapClicks+=c;
-  try{await DB.flush(me,d,c,lastClick||now());completed=r2(completed+d)}
-  catch(e){console.error(e);inflight=r2(inflight-d);pending=r2(pending+d);pendingClicks+=c;snapClicks-=c}
+  const d=pending,c=pendingClicks,me=S.me;pending=0;pendingClicks=0;inflight=r2(inflight+d);inflClicks+=c;
+  try{await DB.flush(me,d,c);completed=r2(completed+d);compClicks+=c}
+  catch(e){console.error(e);inflight=r2(inflight-d);pending=r2(pending+d);inflClicks-=c;pendingClicks+=c}
   flushing=false;recompute();
 }
-async function pollPts(){
-  if(!READY)return;const c0=completed;
-  try{serverPts=await DB.getPoints();completed=r2(completed-c0);inflight=r2(inflight-c0);recompute();softRefresh()}catch(e){console.error(e)}
+async function pollPts(force){
+  if(!READY)return;if(!force&&document.visibilityState==='hidden')return;
+  const c0=completed,k0=compClicks;lastPoll=now();
+  try{const r=await DB.getPoints();serverPts=r.p;serverClicks=r.c;
+    completed=r2(completed-c0);inflight=r2(inflight-c0);compClicks-=k0;inflClicks-=k0;recompute();softRefresh()}catch(e){console.error(e)}
 }
 function softRefresh(){const r=route();if(S.me&&(r==='home'||r==='machines'||r==='standings')&&!UI.modal)render();else tick()}
 
@@ -515,11 +522,8 @@ const DB=(()=>{
     onMachines(cb){return F.onSnapshot(R.mach,d=>cb(d.data()||{m:{}}))},
     onBoard(cb){return F.onSnapshot(R.board,d=>cb(d.data()||{blasts:[]}))},
     onHist(name,cb){return F.onSnapshot(F.doc(db,'hist',name),d=>cb(d.exists()?d.data():{}))},
-    async getPoints(){const d=await F.getDoc(R.pts);return (d.data()||{}).p||{}},
-    async flush(name,d,c,t){const b=F.writeBatch(db);
-      if(d)b.update(R.pts,fp('p',name),F.increment(d));
-      if(c)b.set(F.doc(db,'hist',name),{clicks:F.increment(c),lastClick:t,watched:true},{merge:true});
-      await b.commit()},
+    async getPoints(){const x=(await F.getDoc(R.pts)).data()||{};return {p:x.p||{},c:x.c||{}}},
+    flush(name,d,c){const a=[];if(d)a.push(fp('p',name),F.increment(d));if(c)a.push(fp('c',name),F.increment(c));return F.updateDoc(R.pts,...a)},
     histAdd(name,e){return F.setDoc(F.doc(db,'hist',name),{h:F.arrayUnion(e)},{merge:true})},
     async login(name,pin){const ref=F.doc(db,'pins',name);
       return F.runTransaction(db,async tx=>{const d=await tx.get(ref);if(!d.exists()){tx.set(ref,{pin,t:Date.now()});return 'new'}return d.data().pin===pin?'ok':'bad'})},
@@ -1063,7 +1067,7 @@ function vPK(){
 /* ---------- actions ---------- */
 const mById=id=>S.machines.find(m=>m.id===id);
 const ACT={
- signout(){flush();S.me=null;save();pending=0;inflight=0;completed=0;pendingClicks=0;snapClicks=0;snapHist=[];if(UNSUB_HIST)UNSUB_HIST();UNSUB_HIST=null;
+ signout(){flush();S.me=null;save();pending=0;inflight=0;completed=0;pendingClicks=0;inflClicks=0;compClicks=0;snapClicks=0;snapHist=[];if(UNSUB_HIST)UNSUB_HIST();UNSUB_HIST=null;
   BJ.phase='bet';BJ.p=[];BJ.d=[];BJ.msg='';RL.bets={};RL.msg='';PK={phase:'setup',buyin:2,opps:3};SL.msg='';location.hash='';render()},
  start(el){const m=mById(el.dataset.id);el.disabled=true;DB.start(m.id,S.me).then(ok=>toast(ok?`${m.name} started. ${DUR[m.type]} min.`:'Someone just took that one.')).catch(e=>{console.error(e);toast('Could not start. Check your connection.');el.disabled=false})},
  moved(el){const m=mById(el.dataset.id);DB.clear(m.id,m.user,m.start).then(ok=>{if(ok)toast(`Moved ${first(m.user)}\u2019s clothes. ${m.name} is open.`)}).catch(e=>console.error(e))},
@@ -1074,7 +1078,7 @@ const ACT={
  confirmPick(){doPickup(mById(UI.modal.id),UI.modal.lint)},
  report(el){DB.setBroken(el.dataset.id,true).then(()=>toast('Marked out of order.')).catch(e=>console.error(e))},
  fixed(el){DB.setBroken(el.dataset.id,false).then(()=>toast('Back in service.')).catch(e=>console.error(e))},
- watched(el,e){pendingClicks+=1;lastClick=now();addDelta(1);
+ watched(el,e){pendingClicks+=1;lastClick=now();try{localStorage.setItem('zbt-lastclick',lastClick)}catch(_){}addDelta(1);
   const cc=$('#ccount'),cp=$('#cpts');if(cc)cc.textContent=S.clicks[S.me];if(cp)cp.textContent=fmt(U().pts);
   el.classList.remove('bump');void el.offsetWidth;el.classList.add('bump');
   const r=el.getBoundingClientRect(),x=e&&e.clientX?e.clientX:r.left+r.width/2,y=e&&e.clientY?e.clientY:r.top;
@@ -1129,7 +1133,7 @@ document.addEventListener('submit',async e=>{if(e.target.id!=='loginf')return;e.
   S.me=name;save();subscribeMe();if(location.hash&&location.hash!=='#home')location.hash='';render();if(r==='new')toast('PIN set. Use it next time.')});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&UI.modal)closeModal()});
 document.addEventListener('input',e=>{if(e.target.id==='ctext'){const c=$('#ccount2');if(c)c.textContent=e.target.value.length+'/280'}});
-window.addEventListener('hashchange',()=>{closeModal();render();window.scrollTo(0,0)});
+window.addEventListener('hashchange',()=>{closeModal();render();window.scrollTo(0,0);if(route()==='standings'&&now()-lastPoll>15000)pollPts()});
 
 /* ---------- ticker ---------- */
 let lastAlerts='';
@@ -1140,14 +1144,14 @@ function tick(){
   document.querySelectorAll('[data-prog]').forEach(el=>{const [s,e]=el.dataset.prog.split(',').map(Number);el.style.width=Math.min(100,Math.max(0,(now()-s)/(e-s)*100))+'%'});
 }
 setInterval(()=>{enforce();if(!S.me)return;tick();const g=msig();if(g!==sig){sig=g;softRefresh()}},1000);
-setInterval(flush,4000);
-setInterval(pollPts,60000);
+setInterval(flush,FLUSH_MS);
+setInterval(()=>pollPts(),POLL_MS);
 window.addEventListener('pagehide',()=>flush());
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flush();else pollPts()});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flush();else if(now()-lastPoll>15000)pollPts()});
 
 let UNSUB_HIST=null;
 function subscribeMe(){if(UNSUB_HIST)UNSUB_HIST();const me=S.me;snapHist=[];snapClicks=0;
-  UNSUB_HIST=DB.onHist(me,d=>{if(S.me!==me)return;snapHist=(d.h||[]).slice();snapClicks=d.clicks||0;lastClick=d.lastClick||lastClick;snapWatched=!!d.watched;recompute();softRefresh()});
+  UNSUB_HIST=DB.onHist(me,d=>{if(S.me!==me)return;snapHist=(d.h||[]).slice();snapClicks=d.clicks||0;lastClick=Math.max(d.lastClick||0,lastClick);snapWatched=!!d.watched;recompute();softRefresh()});
   pollPts()}
 async function boot(){
   loadLocal();render();
