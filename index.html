@@ -419,24 +419,97 @@ const TIPS=[
 ];
 const RULES=[['+2','g','Pick up within 10 min of your cycle ending'],['+1','g','Clean the lint trap after a dryer load'],['10m','r','10+ min late: you get blasted to the whole house'],['30m','r','30+ min late: ALL your points are wiped'],['\u00b1','y','Casino wins and losses']];
 
-/* ---------- state ---------- */
-const KEY='zbt-laundry-app-v4';
-let S, UI={modal:null,tipcat:'All'};
-function seed(){
-  const t=now(),users={};BROS.forEach(b=>users[b]={pts:START_PTS[b]||0,hist:[]});
-  const M=(n,type,x)=>Object.assign({id:type[0]+n,type,name:(type==='washer'?'Washer ':'Dryer ')+n,user:null,start:0,dur:0,broken:false,blasted:false,wiped:false,notified:false},x||{});
-  const on=(u,ago,type)=>({user:u,start:t-ago*MIN,dur:DUR[type]});
-  const W=DUR.washer,D=DUR.dryer;
-  return {v:4,me:null,users,watched:{},clicks:{},casino:{},blasts:[],machines:[
-    M(1,'washer',on('Jake Fidacaro',8,'washer')),M(2,'washer'),M(3,'washer',on('Ryan Eng',W+14,'washer')),M(4,'washer'),
-    M(5,'washer',on('Noah Swanson',20,'washer')),M(6,'washer'),M(7,'washer',{broken:true}),M(8,'washer'),
-    M(1,'dryer',on('Owen Lynch',25,'dryer')),M(2,'dryer'),M(3,'dryer',on('Sam Clore',D+4,'dryer')),M(4,'dryer'),
-    M(5,'dryer',on('Tyler Condron',D+33,'dryer')),M(6,'dryer'),M(7,'dryer',on('Max Hayden',40,'dryer')),M(8,'dryer')]};
-}
-function load(){try{const j=localStorage.getItem(KEY);if(j){S=JSON.parse(j);if(S&&S.v===4)return}}catch(e){}S=seed()}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+/* ---------- state (shared via Firebase) ---------- */
+// Paste the Firebase web config here:
+const FIREBASE_CONFIG={
+  apiKey:"AIzaSyD86haOOQGgK6JQOSi6L2-_wGr_QTzXzTU",
+  authDomain:"laundry-app-7b7e3.firebaseapp.com",
+  projectId:"laundry-app-7b7e3",
+  storageBucket:"laundry-app-7b7e3.firebasestorage.app",
+  messagingSenderId:"741840598526",
+  appId:"1:741840598526:web:d35810cb29f4397c10bcaf"
+};
+const MIDS=[1,2,3,4,5,6,7,8].map(n=>'w'+n).concat([1,2,3,4,5,6,7,8].map(n=>'d'+n));
+const mName=id=>(id[0]==='w'?'Washer ':'Dryer ')+id.slice(1);
+const mType=id=>id[0]==='w'?'washer':'dryer';
+let S={me:null,users:{},machines:[],blasts:[],daily:null,watched:{},clicks:{},casino:{}},UI={modal:null,tipcat:'All'};
+BROS.forEach(b=>S.users[b]={pts:0,hist:[]});
+let READY=false,CONN_ERR='',NOTIFIED={};
+const LKEY='zbt-laundry-live-v1';
+function loadLocal(){try{const j=JSON.parse(localStorage.getItem(LKEY)||'{}');S.me=j.me&&BROS.includes(j.me)?j.me:null;S.casino=j.casino||{};NOTIFIED=j.notified||{}}catch(e){}}
+function save(){try{localStorage.setItem(LKEY,JSON.stringify({me:S.me,casino:S.casino,notified:NOTIFIED}))}catch(e){}}
 const U=()=>S.users[S.me];
-function addPts(d,title,sub,tag,c){const u=U();u.pts=r2(u.pts+d);u.hist.unshift({t:now(),title,sub,d,tag,c});save()}
+
+/* points: local deltas are batched and flushed every few seconds; everyone's points are polled once a minute */
+let serverPts={},pending=0,inflight=0,completed=0,flushing=false,pendingClicks=0,snapClicks=0,snapHist=[],lastClick=0,snapWatched=false;
+function recompute(){
+  for(const b of BROS)S.users[b].pts=serverPts[b]||0;
+  if(S.me){S.users[S.me].pts=r2((serverPts[S.me]||0)+pending+inflight);S.clicks[S.me]=snapClicks+pendingClicks;
+    S.watched[S.me]=(snapWatched||pendingClicks>0)?['house1']:[];
+    const h=snapHist.slice();const c=snapClicks+pendingClicks;
+    if(c>0)h.push({t:lastClick||now(),title:'Video',sub:`Clicked \u201cI watched it\u201d ${c} time${c===1?'':'s'}`,d:c,tag:'WATCHED',c:'b'});
+    S.users[S.me].hist=h.sort((a,b)=>b.t-a.t)}
+}
+function addDelta(d){pending=r2(pending+d);recompute()}
+function addPts(d,title,sub,tag,c){addDelta(d);const e={t:now(),title,sub,d,tag,c};snapHist.unshift(e);recompute();DB.histAdd(S.me,e).catch(err=>console.error(err))}
+async function flush(){
+  if(flushing||!S.me||!READY||(!pending&&!pendingClicks))return;flushing=true;
+  const d=pending,c=pendingClicks,me=S.me;pending=0;pendingClicks=0;inflight=r2(inflight+d);snapClicks+=c;
+  try{await DB.flush(me,d,c,lastClick||now());completed=r2(completed+d)}
+  catch(e){console.error(e);inflight=r2(inflight-d);pending=r2(pending+d);pendingClicks+=c;snapClicks-=c}
+  flushing=false;recompute();
+}
+async function pollPts(){
+  if(!READY)return;const c0=completed;
+  try{serverPts=await DB.getPoints();completed=r2(completed-c0);inflight=r2(inflight-c0);recompute();softRefresh()}catch(e){console.error(e)}
+}
+function softRefresh(){const r=route();if(S.me&&(r==='home'||r==='machines'||r==='standings')&&!UI.modal)render();else tick()}
+
+/* ---------- database adapter ---------- */
+const DB=(()=>{
+  let db,F,R={};
+  const fp=(...a)=>new F.FieldPath(...a);
+  const freeM=id=>({user:null,start:0,dur:0,broken:false,blasted:false,wiped:false});
+  return {
+    async init(cfg){
+      if(window.__FAKE_FS){F=window.__FAKE_FS.fs;db=window.__FAKE_FS.db}
+      else{const V='10.12.2';const A=await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`);F=await import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`);db=F.getFirestore(A.initializeApp(cfg))}
+      R.mach=F.doc(db,'state','machines');R.pts=F.doc(db,'state','points');R.board=F.doc(db,'state','board');
+      await F.runTransaction(db,async tx=>{const m=await tx.get(R.mach);if(m.exists())return;
+        const mm={};MIDS.forEach(id=>mm[id]=freeM(id));const pp={};BROS.forEach(b=>pp[b]=START_PTS[b]||0);
+        tx.set(R.mach,{m:mm});tx.set(R.pts,{p:pp});tx.set(R.board,{blasts:[],daily:null})});
+    },
+    onMachines(cb){return F.onSnapshot(R.mach,d=>cb(d.data()||{m:{}}))},
+    onBoard(cb){return F.onSnapshot(R.board,d=>cb(d.data()||{blasts:[]}))},
+    onHist(name,cb){return F.onSnapshot(F.doc(db,'hist',name),d=>cb(d.exists()?d.data():{}))},
+    async getPoints(){const d=await F.getDoc(R.pts);return (d.data()||{}).p||{}},
+    async flush(name,d,c,t){const b=F.writeBatch(db);
+      if(d)b.update(R.pts,fp('p',name),F.increment(d));
+      if(c)b.set(F.doc(db,'hist',name),{clicks:F.increment(c),lastClick:t,watched:true},{merge:true});
+      await b.commit()},
+    histAdd(name,e){return F.setDoc(F.doc(db,'hist',name),{h:F.arrayUnion(e)},{merge:true})},
+    async login(name,pin){const ref=F.doc(db,'pins',name);
+      return F.runTransaction(db,async tx=>{const d=await tx.get(ref);if(!d.exists()){tx.set(ref,{pin,t:Date.now()});return 'new'}return d.data().pin===pin?'ok':'bad'})},
+    async start(id,me){return F.runTransaction(db,async tx=>{const m=((await tx.get(R.mach)).data().m||{})[id];
+      if(!m||m.user||m.broken)return false;tx.update(R.mach,fp('m',id),{user:me,start:Date.now(),dur:DUR[mType(id)],broken:false,blasted:false,wiped:false});return true})},
+    async clear(id,user,start){return F.runTransaction(db,async tx=>{const m=((await tx.get(R.mach)).data().m||{})[id];
+      if(!m||m.user!==user||m.start!==start)return false;tx.update(R.mach,fp('m',id),freeM(id));return true})},
+    setBroken(id,v){return F.updateDoc(R.mach,fp('m',id,'broken'),v)},
+    async blast(id,user,start,t){return F.runTransaction(db,async tx=>{const m=((await tx.get(R.mach)).data().m||{})[id];
+      if(!m||m.user!==user||m.start!==start||m.blasted)return;
+      tx.update(R.mach,fp('m',id,'blasted'),true);tx.update(R.board,{blasts:F.arrayUnion({t,user,mach:mName(id),kind:'late'})})})},
+    async wipe(id,user,start,t){return F.runTransaction(db,async tx=>{const m=((await tx.get(R.mach)).data().m||{})[id];const pts=((await tx.get(R.pts)).data().p||{});
+      if(!m||m.user!==user||m.start!==start||m.wiped)return;const lost=pts[user]||0;
+      tx.update(R.mach,fp('m',id,'wiped'),true);tx.update(R.pts,fp('p',user),0);
+      tx.update(R.board,{blasts:F.arrayUnion({t,user,mach:mName(id),kind:'wipe',lost})});
+      tx.set(F.doc(db,'hist',user),{h:F.arrayUnion({t,title:mName(id),sub:`Left clothes 30+ min. Lost all ${fmt(lost)} points`,d:-lost,tag:'WIPED',c:'r'})},{merge:true})})},
+    async daily(date,picks,t){return F.runTransaction(db,async tx=>{const b=(await tx.get(R.board)).data()||{};const pts=((await tx.get(R.pts)).data().p||{});
+      if(b.daily&&b.daily.date===date)return;
+      tx.update(R.board,{daily:{date,picks},blasts:F.arrayUnion(...picks.map(user=>({t,user,kind:'daily'})))});
+      for(const user of picks){const lost=pts[user]||0;tx.update(R.pts,fp('p',user),0);
+        tx.set(F.doc(db,'hist',user),{h:F.arrayUnion({t,title:'Wiped',sub:'Got wiped',d:-lost,tag:'WIPED',c:'r'})},{merge:true})}})}
+  };
+})();
 const mend=m=>m.start+m.dur*MIN;
 function mstat(m){if(m.broken)return 'broken';if(!m.user)return 'free';return now()<mend(m)?'running':'done'}
 function standing(){const arr=BROS.slice().sort((a,b)=>S.users[b].pts-S.users[a].pts);return arr.indexOf(S.me)+1}
@@ -486,7 +559,7 @@ function render(){
    <aside class="side">
     <div class="brand"><div class="logo">ZBT</div><div><b>The Laundry App</b><span>Fall 2026</span></div></div>
     <nav class="nav">${NAV.map(([k,l])=>`<a href="#${k}" class="${k===act?'on':''}">${svg(k)}<span>${l}</span></a>`).join('')}</nav>
-    <div class="side-foot">Prototype with sample data.<br><button data-act="reset">Reset demo</button></div>
+    <div class="side-foot">ZBT \u00b7 Fall 2026</div>
    </aside>
    <main class="main">
     <header class="top"><div><h1>${title}</h1><p>${sub}</p></div>
@@ -507,8 +580,8 @@ function vLogin(){
    <label for="lpin">PIN</label>
    <input id="lpin" type="password" inputmode="numeric" maxlength="4" placeholder="4 digits" autocomplete="off">
    <div class="err" id="lerr"></div>
-   <button class="btn wide" type="submit" style="margin-top:12px">Sign in →</button>
-   <p class="demo-note">Prototype: pick any brother and type any 4 digits.</p>
+   <button class="btn wide" type="submit" style="margin-top:12px" ${READY?'':'disabled'}>${READY?'Sign in \u2192':CONN_ERR||'Connecting\u2026'}</button>
+   <p class="demo-note">First time? Whatever 4 digits you type becomes your PIN.</p>
   </form></div>`;
 }
 
@@ -577,13 +650,13 @@ function mCard(m){
     acts=`<button class="btn sm" data-act="start" data-id="${m.id}">Use it \u00b7 ${DUR[m.type]} min</button><button class="link" data-act="report" data-id="${m.id}">Report a problem</button>`;}
   else if(st==='running'){badge='<span class="tag b">RUNNING</span>';line=`<span data-end="${mend(m)}">${cd(mend(m))}</span>`;sub=mine?'You':m.user;
     bar=`<div class="bar"><i data-prog="${m.start},${mend(m)}"></i></div>`;
-    if(mine)acts=`<button class="btn ghost sm" data-act="finish" data-id="${m.id}">Finish now (demo)</button>`;}
+}
   else if(st==='done'){late=(now()-mend(m))/MIN;
     badge=late>=30?'<span class="tag r">WIPED</span>':late>=10?'<span class="tag r">BLASTED</span>':'<span class="tag y">DONE</span>';
     line=`Done <span data-since="${mend(m)}">${since(mend(m))}</span>`;
     sub=(mine?'Your':m.user+'\u2019s')+' clothes are waiting';
-    acts=mine?`<button class="btn pink sm" data-act="pickup" data-id="${m.id}">I picked it up</button>${late<30?`<button class="link" data-act="skip" data-id="${m.id}">Skip ahead 10 min (demo)</button>`:''}`
-      :`<button class="btn ghost sm" data-act="nudge" data-id="${m.id}">Nudge ${first(m.user)}</button>`;}
+    acts=mine?`<button class="btn pink sm" data-act="pickup" data-id="${m.id}">I picked it up</button>`
+      :late>=10?`<button class="btn ghost sm" data-act="moved" data-id="${m.id}">I moved their clothes</button>`:'';}
   else{badge='<span class="tag r">OUT OF ORDER</span>';line='Out of order';sub='Reported to the house manager';
     acts=`<button class="btn ghost sm" data-act="fixed" data-id="${m.id}">Mark fixed</button>`;}
   return `<div class="card mach ${st}${late>=10?' late':''}${mine?' mine':''}"><div class="mtop"><h3>${m.name}</h3>${badge}</div>
@@ -595,36 +668,30 @@ function doPickup(m,lint){
   else if(late<30){addPts(0,m.name,`Picked up ${lm} min late. Got blasted`,'LATE','r');msg='Picked up. You still got blasted.'}
   else{addPts(0,m.name,`Picked up ${lm} min late, after the wipe`,'LATE','r');msg='Picked up. Points were already wiped.'}
   if(lint){addPts(1,m.name,'Cleaned the lint trap','LINT TRAP','g');msg+=' +1 for the lint trap.'}
-  Object.assign(m,{user:null,start:0,dur:0,blasted:false,wiped:false,notified:false});save();closeModal();render();toast(msg);
+  const id=m.id,u=m.user,st=m.start;closeModal();toast(msg);DB.clear(id,u,st).catch(err=>{console.error(err);toast('Could not update. Check your connection.')});
 }
 /* enforcement: notify at done, blast at 10 min, wipe at 30 min */
 function beep(){try{const A=window.AudioContext||window.webkitAudioContext;const a=new A();[0,.22].forEach(d=>{const o=a.createOscillator(),g=a.createGain();o.type='square';o.frequency.value=880;g.gain.value=.05;o.connect(g);g.connect(a.destination);o.start(a.currentTime+d);o.stop(a.currentTime+d+.15)})}catch(e){}}
 /* daily random wipe: same 5 picks for everyone on a given day */
 function seededRand(str){let h=1779033703^str.length;for(let i=0;i<str.length;i++){h=Math.imul(h^str.charCodeAt(i),3432918353);h=h<<13|h>>>19}
   return ()=>{h=Math.imul(h^h>>>16,2246822507);h=Math.imul(h^h>>>13,3266489909);h^=h>>>16;return (h>>>0)/4294967296}}
-function dailyWipe(){
-  const d=todayKey();if(S.dailyWipe===d)return false;S.dailyWipe=d;
-  const rnd=seededRand('zbt-wipe-'+d),pool=BROS.slice(),picks=[];
-  while(picks.length<5&&pool.length)picks.push(pool.splice(Math.floor(rnd()*pool.length),1)[0]);
-  const t0=new Date();t0.setHours(0,0,0,0);
-  for(const name of picks){const u=S.users[name];if(!u)continue;const lost=u.pts;u.pts=0;
-    u.hist.unshift({t:t0.getTime(),title:'Wiped',sub:'Got wiped',d:-lost,tag:'WIPED',c:'r'});
-    S.blasts.push({t:t0.getTime(),user:name,kind:'daily'});
-    if(name===S.me)toast('You got wiped.')}
-  return true;
-}
+const CLAIM={};
+function dailyPicks(d){const rnd=seededRand('zbt-wipe-'+d),pool=BROS.slice(),picks=[];
+  while(picks.length<5&&pool.length)picks.push(pool.splice(Math.floor(rnd()*pool.length),1)[0]);return picks}
 function enforce(){
-  let ch=dailyWipe();
+  if(!READY)return false;const d=todayKey();
+  if(S.daily!==d&&!CLAIM['day'+d]){CLAIM['day'+d]=1;
+    DB.daily(d,dailyPicks(d),now()).catch(e=>{console.error(e);delete CLAIM['day'+d]})}
+  if(S.me&&S.daily===d&&S.dailyPicks&&S.dailyPicks.includes(S.me)&&!NOTIFIED['day'+d]){NOTIFIED['day'+d]=1;save();toast('You got wiped.');pollPts()}
   for(const m of S.machines){
-    if(mstat(m)!=='done')continue;const end=mend(m),late=(now()-end)/MIN,me=S.me&&m.user===S.me;
-    if(me&&!m.notified){m.notified=true;ch=true;if(late<10){toast(`Your ${m.name} load is done. Grab it within 10 min.`);beep()}}
-    if(late>=10&&!m.blasted){m.blasted=true;ch=true;S.blasts.unshift({t:end+10*MIN,user:m.user,mach:m.name,kind:'late'});if(me){toast('You just got blasted to the whole house.');beep()}}
-    if(late>=30&&!m.wiped){m.wiped=true;ch=true;const u=S.users[m.user],lost=u.pts;u.pts=0;
-      u.hist.unshift({t:end+30*MIN,title:m.name,sub:`Left clothes 30+ min. Lost all ${fmt(lost)} points`,d:-lost,tag:'WIPED',c:'r'});
-      S.blasts.unshift({t:end+30*MIN,user:m.user,mach:m.name,kind:'wipe',lost});if(me)toast('30 minutes. All your points are gone.')}
+    if(mstat(m)!=='done')continue;const end=mend(m),late=(now()-end)/MIN,me=S.me&&m.user===S.me,k=m.id+':'+m.start;
+    if(me&&!NOTIFIED['n'+k]){NOTIFIED['n'+k]=1;save();if(late<10){toast(`Your ${m.name} load is done. Grab it within 10 min.`);beep()}}
+    if(me&&m.blasted&&!NOTIFIED['b'+k]){NOTIFIED['b'+k]=1;save();if(late<30){toast('You just got blasted to the whole house.');beep()}}
+    if(me&&m.wiped&&!NOTIFIED['w'+k]){NOTIFIED['w'+k]=1;save();toast('30 minutes. All your points are gone.');pollPts()}
+    if(late>=10&&!m.blasted&&!CLAIM['b'+k]){CLAIM['b'+k]=1;DB.blast(m.id,m.user,m.start,end+10*MIN).catch(e=>{console.error(e);delete CLAIM['b'+k]})}
+    if(late>=30&&!m.wiped&&!CLAIM['w'+k]){CLAIM['w'+k]=1;DB.wipe(m.id,m.user,m.start,end+30*MIN).catch(e=>{console.error(e);delete CLAIM['w'+k]})}
   }
-  if(ch){S.blasts.sort((a,b)=>b.t-a.t);S.blasts=S.blasts.slice(0,40);save()}
-  return ch;
+  return false;
 }
 function alertsHTML(){
   if(!S||!S.me)return '';let h='';
@@ -687,8 +754,8 @@ const LIM={bj:200,rl:200,sl:300,pk:50};
 function C(){let c=S.casino[S.me];const d=todayKey();if(!c||c.date!==d)c=S.casino[S.me]={date:d,bj:0,rl:0,sl:0,pk:0,net:0};return c}
 function stake(g,amt){const u=U(),c=C();if(amt>u.pts+1e-9){toast('Not enough points.');return false}
   if(g&&c[g]>=LIM[g]){toast('Daily limit hit. Come back tomorrow.');return false}
-  u.pts=r2(u.pts-amt);c.net=r2(c.net-amt);if(g)c[g]++;save();return true}
-function pay(amt){const u=U(),c=C();u.pts=r2(u.pts+amt);c.net=r2(c.net+amt);save()}
+  addDelta(-amt);c.net=r2(c.net-amt);if(g)c[g]++;save();return true}
+function pay(amt){const c=C();addDelta(amt);c.net=r2(c.net+amt);save()}
 function tiles(){const c=C();return `<div class="ctiles"><div class="ctile"><div class="l">POINTS</div><div class="n neon-y">${fmt(U().pts)}</div></div>
   <div class="ctile" style="background:#10101c"><div class="l">TODAY</div><div class="n ${c.net>0?'neon-g':c.net<0?'neon-r':''}">${sgn(c.net)}</div></div></div>`}
 const backLink=()=>'<a class="back" href="#casino">← Casino</a>';
@@ -900,24 +967,19 @@ function vPK(){
 /* ---------- actions ---------- */
 const mById=id=>S.machines.find(m=>m.id===id);
 const ACT={
- signout(){S.me=null;save();BJ.phase='bet';BJ.p=[];BJ.d=[];BJ.msg='';RL.bets={};RL.msg='';PK={phase:'setup',buyin:2,opps:3};SL.msg='';location.hash='';render()},
- reset(){const me=S.me;S=seed();S.me=me;save();render();toast('Demo data reset.')},
- start(el){const m=mById(el.dataset.id);Object.assign(m,{user:S.me,start:now(),dur:DUR[m.type],blasted:false,wiped:false,notified:false});save();render();toast(`${m.name} started. ${DUR[m.type]} min.`)},
- skip(el){const m=mById(el.dataset.id);m.start-=10*MIN;enforce();save();render()},
+ signout(){flush();S.me=null;save();pending=0;inflight=0;completed=0;pendingClicks=0;snapClicks=0;snapHist=[];if(UNSUB_HIST)UNSUB_HIST();UNSUB_HIST=null;
+  BJ.phase='bet';BJ.p=[];BJ.d=[];BJ.msg='';RL.bets={};RL.msg='';PK={phase:'setup',buyin:2,opps:3};SL.msg='';location.hash='';render()},
+ start(el){const m=mById(el.dataset.id);el.disabled=true;DB.start(m.id,S.me).then(ok=>toast(ok?`${m.name} started. ${DUR[m.type]} min.`:'Someone just took that one.')).catch(e=>{console.error(e);toast('Could not start. Check your connection.');el.disabled=false})},
+ moved(el){const m=mById(el.dataset.id);DB.clear(m.id,m.user,m.start).then(ok=>{if(ok)toast(`Moved ${first(m.user)}\u2019s clothes. ${m.name} is open.`)}).catch(e=>console.error(e))},
  close(){closeModal()},
  ovclose(el,e){if(e.target===el)closeModal()},
- finish(el){const m=mById(el.dataset.id);m.start=now()-m.dur*MIN;save();render()},
  pickup(el){const m=mById(el.dataset.id);if(m.type==='dryer'){UI.modal={type:'pickup',id:m.id,lint:false};drawModal()}else doPickup(m,false)},
  lint(){UI.modal.lint=!UI.modal.lint;drawModal()},
  confirmPick(){doPickup(mById(UI.modal.id),UI.modal.lint)},
- nudge(el){toast(`Nudge sent to ${first(mById(el.dataset.id).user)} (demo).`)},
- report(el){mById(el.dataset.id).broken=true;save();render();toast('Marked out of order.')},
- fixed(el){mById(el.dataset.id).broken=false;save();render();toast('Back in service.')},
- watched(el,e){const w=S.watched[S.me]||(S.watched[S.me]=[]);if(!w.includes(el.dataset.id))w.push(el.dataset.id);
-  S.clicks[S.me]=(S.clicks[S.me]||0)+1;const u=U();u.pts=r2(u.pts+1);const h=u.hist[0],d=todayKey();
-  if(h&&h.tag==='WATCHED'&&h.day===d){h.d+=1;h.t=now();h.sub=`Clicked \u201cI watched it\u201d ${h.d} times`}
-  else u.hist.unshift({t:now(),title:'Video',sub:'Clicked \u201cI watched it\u201d 1 time',d:1,tag:'WATCHED',c:'b',day:d});
-  save();const cc=$('#ccount'),cp=$('#cpts');if(cc)cc.textContent=S.clicks[S.me];if(cp)cp.textContent=fmt(u.pts);
+ report(el){DB.setBroken(el.dataset.id,true).then(()=>toast('Marked out of order.')).catch(e=>console.error(e))},
+ fixed(el){DB.setBroken(el.dataset.id,false).then(()=>toast('Back in service.')).catch(e=>console.error(e))},
+ watched(el,e){pendingClicks+=1;lastClick=now();addDelta(1);
+  const cc=$('#ccount'),cp=$('#cpts');if(cc)cc.textContent=S.clicks[S.me];if(cp)cp.textContent=fmt(U().pts);
   el.classList.remove('bump');void el.offsetWidth;el.classList.add('bump');
   const r=el.getBoundingClientRect(),x=e&&e.clientX?e.clientX:r.left+r.width/2,y=e&&e.clientY?e.clientY:r.top;
   const f=document.createElement('div');f.className='floater';f.textContent='+1';f.style.left=(x-14+(Math.random()*30-15))+'px';f.style.top=(y-30)+'px';document.body.appendChild(f);setTimeout(()=>f.remove(),900)},
@@ -959,8 +1021,12 @@ const ACT={
  pkfold(){pkMe().folded=true;PK.log.push('You fold.');pkShowdown()}
 };
 document.addEventListener('click',e=>{const el=e.target.closest('[data-act]');if(!el)return;const f=ACT[el.dataset.act];if(f){if(el.tagName==='BUTTON')e.preventDefault();f(el,e)}});
-document.addEventListener('submit',e=>{if(e.target.id!=='loginf')return;e.preventDefault();const pin=$('#lpin').value.trim();
-  if(!/^\d{4}$/.test(pin)){$('#lerr').textContent='Enter a 4 digit PIN.';return}S.me=$('#lname').value;save();if(location.hash&&location.hash!=='#home')location.hash='';render()});
+document.addEventListener('submit',async e=>{if(e.target.id!=='loginf')return;e.preventDefault();const pin=$('#lpin').value.trim(),name=$('#lname').value,btn=e.target.querySelector('button[type=submit]');
+  if(!READY){$('#lerr').textContent='Still connecting. Try again in a second.';return}
+  if(!/^\d{4}$/.test(pin)){$('#lerr').textContent='Enter a 4 digit PIN.';return}
+  btn.disabled=true;let r;try{r=await DB.login(name,pin)}catch(err){console.error(err);$('#lerr').textContent='Could not reach the database.';btn.disabled=false;return}
+  if(r==='bad'){$('#lerr').textContent='Wrong PIN for '+first(name)+'.';btn.disabled=false;return}
+  S.me=name;save();subscribeMe();if(location.hash&&location.hash!=='#home')location.hash='';render();if(r==='new')toast('PIN set. Use it next time.')});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&UI.modal)closeModal()});
 window.addEventListener('hashchange',()=>{closeModal();render();window.scrollTo(0,0)});
 
@@ -972,9 +1038,26 @@ function tick(){
   document.querySelectorAll('[data-since]').forEach(el=>el.textContent=since(+el.dataset.since));
   document.querySelectorAll('[data-prog]').forEach(el=>{const [s,e]=el.dataset.prog.split(',').map(Number);el.style.width=Math.min(100,Math.max(0,(now()-s)/(e-s)*100))+'%'});
 }
-setInterval(()=>{if(!S||!S.me)return;const ch=enforce();tick();const g=msig();if(g!==sig||ch){sig=g;const r=route();if((r==='home'||r==='machines'||r==='standings')&&!UI.modal)render()}},1000);
+setInterval(()=>{enforce();if(!S.me)return;tick();const g=msig();if(g!==sig){sig=g;softRefresh()}},1000);
+setInterval(flush,4000);
+setInterval(pollPts,60000);
+window.addEventListener('pagehide',()=>flush());
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flush();else pollPts()});
 
-load();enforce();render();
+let UNSUB_HIST=null;
+function subscribeMe(){if(UNSUB_HIST)UNSUB_HIST();const me=S.me;snapHist=[];snapClicks=0;
+  UNSUB_HIST=DB.onHist(me,d=>{if(S.me!==me)return;snapHist=(d.h||[]).slice();snapClicks=d.clicks||0;lastClick=d.lastClick||lastClick;snapWatched=!!d.watched;recompute();softRefresh()});
+  pollPts()}
+async function boot(){
+  loadLocal();render();
+  if(!FIREBASE_CONFIG&&!window.__FAKE_FS){CONN_ERR='Database not set up yet.';render();return}
+  try{await DB.init(FIREBASE_CONFIG)}catch(e){console.error(e);CONN_ERR='Could not connect to the database.';render();return}
+  let gotM=false,gotB=false;
+  const ready=()=>{if(READY||!gotM||!gotB)return;READY=true;if(S.me)subscribeMe();else pollPts();render()};
+  DB.onMachines(d=>{const mm=d.m||{};S.machines=MIDS.map(id=>Object.assign({id,type:mType(id),name:mName(id),user:null,start:0,dur:0},mm[id]||{}));gotM=true;ready();if(READY){enforce();softRefresh()}});
+  DB.onBoard(d=>{S.blasts=(d.blasts||[]).slice().sort((a,b)=>b.t-a.t);S.daily=d.daily?d.daily.date:null;S.dailyPicks=d.daily?d.daily.picks:null;gotB=true;ready();if(READY)softRefresh()});
+}
+boot();
 })();
 </script>
 </body>
