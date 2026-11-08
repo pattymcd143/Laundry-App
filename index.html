@@ -228,6 +228,8 @@ textarea:focus{border-color:var(--pink);box-shadow:0 0 12px rgba(255,47,214,.3)}
 .royal{color:var(--gold)!important;font-style:italic;font-weight:900;font-size:1.25em;text-shadow:0 0 8px rgba(255,210,63,.75),0 0 18px rgba(255,210,63,.35);-webkit-text-fill-color:var(--gold)}
 .crown{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:5px;filter:drop-shadow(0 0 4px rgba(255,210,63,.9))}
 .vcheck{width:.95em;height:.95em;vertical-align:-.12em;margin-left:5px;filter:drop-shadow(0 0 3px rgba(29,155,240,.7))}
+.bquote{margin:8px 0 6px;padding:10px 14px;border-left:3px solid var(--red);background:rgba(255,59,92,.08);border-radius:0 8px 8px 0;font-size:16px;color:#ffd6de;font-style:italic;white-space:pre-wrap;word-break:break-word}
+.nukeb{border-color:var(--red);box-shadow:0 0 18px rgba(255,59,92,.3)}
 /* tips */
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:28px 0 8px}
 .fchip{padding:9px 16px;border:1px solid var(--line2);border-radius:999px;font-weight:600;color:#ccd;background:#0b0b15}
@@ -391,6 +393,8 @@ const fmt=n=>{const v=r2(n);return (Object.is(v,-0)?0:v).toLocaleString('en-US',
 const sgn=n=>n>0?'+'+fmt(n):n<0?'−'+fmt(-n):'0';
 const first=n=>String(n).split(' ')[0];
 const KING='Brendan Zamota',VERIFY_AT=1000;
+// one random brother (never the King) is wiped every 30 min, starting Sun Nov 8 2026 6:00 PM Eastern
+const WIPE_START=window.__WIPE_START||Date.UTC(2026,10,8,23,0,0),WIPE_EVERY=30*60000;
 const CROWN='<svg class="crown" viewBox="0 0 24 24" aria-label="crown"><path fill="#ffd23f" d="M3 18h18l1-11-5.5 4L12 4 7.5 11 2 7z"/><rect x="3" y="19.5" width="18" height="2.2" rx="1" fill="#ffd23f"/></svg>';
 const VCHECK='<svg class="vcheck" viewBox="0 0 24 24" aria-label="verified"><path fill="#1d9bf0" d="M12 1l2.6 2.2 3.4-.4.9 3.3 3 1.7-1.2 3.2 1.2 3.2-3 1.7-.9 3.3-3.4-.4L12 23l-2.6-2.2-3.4.4-.9-3.3-3-1.7L3.3 13 2.1 9.8l3-1.7.9-3.3 3.4.4z"/><path fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M7.5 12.3l3 3 6-6.3"/></svg>';
 const isVerified=n=>!!(S&&S.users&&S.users[n]&&S.users[n].pts>=VERIFY_AT);
@@ -529,6 +533,7 @@ const DB=(()=>{
       tx.update(R.mach,fp('m',id,'blasted'),true);tx.update(R.board,{blasts:F.arrayUnion({t,user,mach:mName(id),kind:'late'})})})},
     async wipe(id,user,start,t){return F.runTransaction(db,async tx=>{const m=((await tx.get(R.mach)).data().m||{})[id];const pts=((await tx.get(R.pts)).data().p||{});
       if(!m||m.user!==user||m.start!==start||m.wiped)return;const lost=pts[user]||0;
+      if(user===KING){tx.update(R.mach,fp('m',id,'wiped'),true);return}
       tx.update(R.mach,fp('m',id,'wiped'),true);tx.update(R.pts,fp('p',user),0);
       tx.update(R.board,{blasts:F.arrayUnion({t,user,mach:mName(id),kind:'wipe',lost})});
       tx.set(F.doc(db,'hist',user),{h:F.arrayUnion({t,title:mName(id),sub:`Left clothes 30+ min. Lost all ${fmt(lost)} points`,d:-lost,tag:'WIPED',c:'r'})},{merge:true})})},
@@ -538,17 +543,24 @@ const DB=(()=>{
       if(!cs.exists())return 'gone';const c=cs.data();const likes=c.likes||[];
       if(likes.includes(me)||c.by===me||c.target===me)return 'no';
       const nl=likes.concat([me]);
-      if(nl.length>=3&&!c.nuked){const lost=pts[c.target]||0,t=Date.now();
+      if(nl.length>=3&&!c.nuked){const t=Date.now(),text=String(c.text||'').slice(0,280);
+        if(c.target===KING){tx.update(ref,{likes:nl,nuked:true,lost:0,immune:true});
+          tx.update(R.board,{blasts:F.arrayUnion({t,user:c.target,kind:'nuke',lost:0,by:c.by,text,immune:true})});return 'immune'}
+        const lost=pts[c.target]||0;
         tx.update(ref,{likes:nl,nuked:true,lost});tx.update(R.pts,fp('p',c.target),0);
-        tx.update(R.board,{blasts:F.arrayUnion({t,user:c.target,kind:'nuke',lost,by:c.by})});
+        tx.update(R.board,{blasts:F.arrayUnion({t,user:c.target,kind:'nuke',lost,by:c.by,text})});
         tx.set(F.doc(db,'hist',c.target),{h:F.arrayUnion({t,title:'Complaint',sub:`Complaint by ${c.by} hit 3 likes. Lost all ${fmt(lost)} points`,d:-lost,tag:'NUKED',c:'r'})},{merge:true});
         return 'nuked'}
       tx.update(ref,{likes:nl});return 'ok'})},
-    async daily(date,picks,t){return F.runTransaction(db,async tx=>{const b=(await tx.get(R.board)).data()||{};const pts=((await tx.get(R.pts)).data().p||{});
-      if(b.daily&&b.daily.date===date)return;
-      tx.update(R.board,{daily:{date,picks},blasts:F.arrayUnion(...picks.map(user=>({t,user,kind:'daily'})))});
-      for(const user of picks){const lost=pts[user]||0;tx.update(R.pts,fp('p',user),0);
-        tx.set(F.doc(db,'hist',user),{h:F.arrayUnion({t,title:'Wiped',sub:'Got wiped',d:-lost,tag:'WIPED',c:'r'})},{merge:true})}})}
+    async slotWipes(cur){return F.runTransaction(db,async tx=>{const b=(await tx.get(R.board)).data()||{};const pts=((await tx.get(R.pts)).data().p||{});
+      const prev=typeof b.wipeSlot==='number'?b.wipeSlot:-1;if(prev>=cur)return;
+      const from=Math.max(prev+1,cur-47),left=Object.assign({},pts),entries=[],hist={};
+      for(let sl=from;sl<=cur;sl++){const user=slotPick(sl),t=WIPE_START+sl*WIPE_EVERY,lost=left[user]||0;left[user]=0;
+        entries.push({t,user,kind:'daily'});(hist[user]=hist[user]||[]).push({t,title:'Wiped',sub:'Got wiped',d:-lost,tag:'WIPED',c:'r'})}
+      const users=Object.keys(hist),args=[];users.forEach(u=>args.push(fp('p',u),0));
+      tx.update(R.board,{wipeSlot:cur,blasts:F.arrayUnion(...entries)});
+      tx.update(R.pts,...args);
+      users.forEach(u=>tx.set(F.doc(db,'hist',u),{h:F.arrayUnion(...hist[u])},{merge:true}))})}
   };
 })();
 const mend=m=>m.start+m.dur*MIN;
@@ -668,7 +680,7 @@ function vHome(){
   ${hist.length?hist.map(histRow).join(''):'<div class="card empty">No points yet. Watch the video or start a load.</div>'}`;
 }
 function blastRow(b){
-  if(b.kind==='nuke')return `<div class="card hist blast"><div><b>${nameH(b.user)} got nuked</b><div class="s">Complaint by ${nameH(b.by)} hit 3 likes \u00b7 lost ${fmt(b.lost||0)} points \u00b7 ${since(b.t)}</div></div><div class="rt"><span class="tag r">NUKED</span></div></div>`;
+  if(b.kind==='nuke')return `<div class="card hist blast nukeb"><div><b>${nameH(b.user)} ${b.immune?'survived a complaint. The crown makes him immune.':'got nuked'}</b>${b.text?`<div class="bquote">\u201c${esc(b.text)}\u201d</div>`:''}<div class="s">Complaint by ${nameH(b.by)} hit 3 likes${b.immune?'':' \u00b7 lost '+fmt(b.lost||0)+' points'} \u00b7 ${since(b.t)}</div></div><div class="rt"><span class="tag ${b.immune?'y':'r'}">${b.immune?'IMMUNE':'NUKED'}</span></div></div>`;
   if(b.kind==='daily')return `<div class="card hist blast"><div><b>${nameH(b.user)} got wiped</b><div class="s">${since(b.t)}</div></div><div class="rt"><span class="tag r">WIPED</span></div></div>`;
   const wipe=b.kind==='wipe';
   return `<div class="card hist blast"><div><b>${nameH(b.user)} ${wipe?(b.lost>0?'lost all '+fmt(b.lost)+' points':'got their points wiped'):'left their clothes in '+b.mach}</b><div class="s">${wipe?b.mach+' \u00b7 30+ min late':'10+ min after the cycle ended'} \u00b7 ${since(b.t)}</div></div>
@@ -720,18 +732,17 @@ function beep(){try{const A=window.AudioContext||window.webkitAudioContext;const
 function seededRand(str){let h=1779033703^str.length;for(let i=0;i<str.length;i++){h=Math.imul(h^str.charCodeAt(i),3432918353);h=h<<13|h>>>19}
   return ()=>{h=Math.imul(h^h>>>16,2246822507);h=Math.imul(h^h>>>13,3266489909);h^=h>>>16;return (h>>>0)/4294967296}}
 const CLAIM={};
-function dailyPicks(d){const rnd=seededRand('zbt-wipe-'+d),pool=BROS.slice(),picks=[];
-  while(picks.length<5&&pool.length)picks.push(pool.splice(Math.floor(rnd()*pool.length),1)[0]);return picks}
+function slotPick(sl){const rnd=seededRand('zbt-wipe-slot-'+sl),pool=BROS.filter(b=>b!==KING);return pool[Math.floor(rnd()*pool.length)]}
 function enforce(){
-  if(!READY)return false;const d=todayKey();
-  if(S.daily!==d&&!CLAIM['day'+d]){CLAIM['day'+d]=1;
-    DB.daily(d,dailyPicks(d),now()).catch(e=>{console.error(e);delete CLAIM['day'+d]})}
-  if(S.me&&S.daily===d&&S.dailyPicks&&S.dailyPicks.includes(S.me)&&!NOTIFIED['day'+d]){NOTIFIED['day'+d]=1;save();toast('You got wiped.');pollPts()}
+  if(!READY)return false;
+  const cur=Math.floor((now()-WIPE_START)/WIPE_EVERY);
+  if(cur>=0&&!(S.wipeSlot>=cur)&&!CLAIM['slot'+cur]){CLAIM['slot'+cur]=1;DB.slotWipes(cur).catch(e=>{console.error(e);delete CLAIM['slot'+cur]})}
+  if(S.me)for(const b of S.blasts){if(b.kind==='daily'&&b.user===S.me&&b.t>now()-35*MIN&&!NOTIFIED['wp'+b.t]){NOTIFIED['wp'+b.t]=1;save();toast('You got wiped.');pollPts()}}
   for(const m of S.machines){
     if(mstat(m)!=='done')continue;const end=mend(m),late=(now()-end)/MIN,me=S.me&&m.user===S.me,k=m.id+':'+m.start;
     if(me&&!NOTIFIED['n'+k]){NOTIFIED['n'+k]=1;save();if(late<10){toast(`Your ${m.name} load is done. Grab it within 10 min.`);beep()}}
     if(me&&m.blasted&&!NOTIFIED['b'+k]){NOTIFIED['b'+k]=1;save();if(late<30){toast('You just got blasted to the whole house.');beep()}}
-    if(me&&m.wiped&&!NOTIFIED['w'+k]){NOTIFIED['w'+k]=1;save();toast('30 minutes. All your points are gone.');pollPts()}
+    if(me&&m.wiped&&!NOTIFIED['w'+k]){NOTIFIED['w'+k]=1;save();toast(S.me===KING?'30 minutes late. The crown protects your points.':'30 minutes. All your points are gone.');pollPts()}
     if(late>=10&&!m.blasted&&!CLAIM['b'+k]){CLAIM['b'+k]=1;DB.blast(m.id,m.user,m.start,end+10*MIN).catch(e=>{console.error(e);delete CLAIM['b'+k]})}
     if(late>=30&&!m.wiped&&!CLAIM['w'+k]){CLAIM['w'+k]=1;DB.wipe(m.id,m.user,m.start,end+30*MIN).catch(e=>{console.error(e);delete CLAIM['w'+k]})}
   }
@@ -741,11 +752,14 @@ function alertsHTML(){
   if(!S||!S.me)return '';let h='';
   for(const m of S.machines.filter(x=>x.user===S.me&&mstat(x)==='done')){const late=(now()-mend(m))/MIN;
     if(late<10)h+=`<div class="alert amber"><b>Your load in ${m.name} is done.</b> Grab it in the next ${Math.ceil(10-late)+' min'} or you get blasted. <a href="#machines">Go \u2192</a></div>`;
-    else if(late<30)h+=`<div class="alert red"><b>You are being blasted.</b> Your clothes are still in ${m.name}. All your points get wiped in ${Math.ceil(30-late)+' min'}. <a href="#machines">Go \u2192</a></div>`;
+    else if(late<30)h+=`<div class="alert red"><b>You are being blasted.</b> Your clothes are still in ${m.name}. ${S.me===KING?'The crown keeps your points safe, but everyone can see it.':'All your points get wiped in '+Math.ceil(30-late)+' min.'} <a href="#machines">Go \u2192</a></div>`;
     else h+=`<div class="alert red"><b>Points wiped.</b> Your clothes are still in ${m.name}. <a href="#machines">Go \u2192</a></div>`;}
   const act=S.machines.filter(m=>m.user&&m.user!==S.me&&mstat(m)==='done'&&(now()-mend(m))/MIN>=10);
-  if(act.length){const items=act.map(m=>{const l=Math.floor((now()-mend(m))/MIN);return `<span>${nameH(m.user,{upper:1})} LEFT THEIR CLOTHES IN ${m.name.toUpperCase()} \u00b7 ${l} MIN${l>=30?' \u00b7 POINTS WIPED':''}</span>`}).join('');
-    h+=`<div class="ticker"><b>BLAST</b><div class="tk"><div class="tk-in">${items}${items}</div></div></div>`}
+  const nukes=S.blasts.filter(b=>b.kind==='nuke'&&now()-b.t<60*MIN).map(b=>`<span>${nameH(b.user,{upper:1})} ${b.immune?'SURVIVED (IMMUNE)':'GOT NUKED'}: \u201c${esc(b.text||'')}\u201d</span>`).join('');
+  let items='';
+  if(act.length)items+=act.map(m=>{const l=Math.floor((now()-mend(m))/MIN);return `<span>${nameH(m.user,{upper:1})} LEFT THEIR CLOTHES IN ${m.name.toUpperCase()} \u00b7 ${l} MIN${l>=30&&m.user!==KING?' \u00b7 POINTS WIPED':''}</span>`}).join('');
+  items+=nukes;
+  if(items)h+=`<div class="ticker"><b>BLAST</b><div class="tk"><div class="tk-in">${items}${items}</div></div></div>`;
   return h;
 }
 /* ---------- modal ---------- */
@@ -806,7 +820,7 @@ function vComplaints(){
 function clistHTML(){
   if(!S.complaints.length)return '<div class="card empty">No complaints yet. Suspicious.</div>';
   return S.complaints.map(c=>{const likes=c.likes||[],n=likes.length,mine=c.by===S.me,isT=c.target===S.me,liked=likes.includes(S.me);
-    const btn=c.nuked?`<span class="tag r">NUKED \u00b7 ${fmt(c.lost||0)} POINTS GONE</span>`
+    const btn=c.nuked?(c.immune?`<span class="tag y">IMMUNE \u00b7 THE CROWN PROTECTS HIM</span>`:`<span class="tag r">NUKED \u00b7 ${fmt(c.lost||0)} POINTS GONE</span>`)
       :isT?`<span class="m small">You can\u2019t like a complaint about you</span>`
       :mine?`<span class="m small">Your complaint</span>`
       :liked?`<button class="btn ghost sm" disabled>Liked</button>`
@@ -1066,7 +1080,7 @@ const ACT={
  cpost(el){const t=$('#ctarget').value,x=$('#ctext').value.trim();
   if(!BROS.includes(t)||t===S.me){toast('Pick a brother.');return}if(x.length<3){toast('Say what he did.');return}
   el.disabled=true;DB.addComplaint(S.me,t,x.slice(0,280)).then(()=>{$('#ctext').value='';$('#ctarget').value='';$('#ccount2').textContent='0/280';toast(`Complaint posted. 3 likes and ${first(t)} is done.`)}).catch(e=>{console.error(e);toast('Could not post. Try again.')}).finally(()=>{el.disabled=false})},
- clike(el){el.disabled=true;DB.like(el.dataset.id,S.me).then(r=>{if(r==='nuked')toast('That was the 3rd like. Points nuked.');}).catch(e=>{console.error(e);toast('Could not like. Try again.');el.disabled=false})},
+ clike(el){el.disabled=true;DB.like(el.dataset.id,S.me).then(r=>{if(r==='nuked')toast('That was the 3rd like. Points nuked and it\u2019s on blast.');else if(r==='immune')toast('3 likes, but the King is immune.')}).catch(e=>{console.error(e);toast('Could not like. Try again.');el.disabled=false})},
  tipcat(el){UI.tipcat=el.dataset.c;render()},
  bjbet(el){BJ.bet=+el.dataset.v;render()},
  bjdeal(){if(!stake('bj',BJ.bet))return;BJ.stake=BJ.bet;BJ.p=[draw()];BJ.p.push(pick(notTwentyOne(BJ.p)));BJ.d=[draw(),draw()];BJ.msg='';BJ.cls='';BJ.phase='play';
@@ -1141,9 +1155,9 @@ async function boot(){
   const ready=()=>{if(READY||!gotM||!gotB)return;READY=true;if(S.me)subscribeMe();else pollPts();render()};
   DB.onMachines(d=>{const mm=d.m||{};S.machines=MIDS.map(id=>Object.assign({id,type:mType(id),name:mName(id),user:null,start:0,dur:0},mm[id]||{}));gotM=true;ready();if(READY){enforce();softRefresh()}});
   DB.onComplaints(list=>{S.complaints=list;
-    if(S.me)for(const c of list){if(c.target===S.me&&c.nuked&&!NOTIFIED['nk'+c.id]){NOTIFIED['nk'+c.id]=1;save();toast('A complaint about you hit 3 likes. Points nuked.');pollPts()}}
+    if(S.me)for(const c of list){if(c.target===S.me&&c.nuked&&!NOTIFIED['nk'+c.id]){NOTIFIED['nk'+c.id]=1;save();toast(c.immune?'A complaint about you hit 3 likes. The crown protects you.':'A complaint about you hit 3 likes. Points nuked.');pollPts()}}
     refreshComplaints()});
-  DB.onBoard(d=>{S.blasts=(d.blasts||[]).slice().sort((a,b)=>b.t-a.t);S.daily=d.daily?d.daily.date:null;S.dailyPicks=d.daily?d.daily.picks:null;gotB=true;ready();if(READY)softRefresh()});
+  DB.onBoard(d=>{S.blasts=(d.blasts||[]).slice().sort((a,b)=>b.t-a.t);S.wipeSlot=typeof d.wipeSlot==='number'?d.wipeSlot:null;gotB=true;ready();if(READY)softRefresh()});
 }
 boot();
 })();
