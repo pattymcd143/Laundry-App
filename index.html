@@ -679,8 +679,9 @@ function vHome(){
   <div class="section-h">History <span class="count">${u.hist.length}</span></div>
   ${hist.length?hist.map(histRow).join(''):'<div class="card empty">No points yet. Watch the video or start a load.</div>'}`;
 }
+function nukeText(b){if(b.text)return b.text;const c=S.complaints.find(c=>c.nuked&&c.target===b.user&&c.by===b.by);return c?c.text:''}
 function blastRow(b){
-  if(b.kind==='nuke')return `<div class="card hist blast nukeb"><div><b>${nameH(b.user)} ${b.immune?'survived a complaint. The crown makes him immune.':'got nuked'}</b>${b.text?`<div class="bquote">\u201c${esc(b.text)}\u201d</div>`:''}<div class="s">Complaint by ${nameH(b.by)} hit 3 likes${b.immune?'':' \u00b7 lost '+fmt(b.lost||0)+' points'} \u00b7 ${since(b.t)}</div></div><div class="rt"><span class="tag ${b.immune?'y':'r'}">${b.immune?'IMMUNE':'NUKED'}</span></div></div>`;
+  if(b.kind==='nuke')return `<div class="card hist blast nukeb"><div><b>${nameH(b.user)} ${b.immune?'survived a complaint. The crown makes him immune.':'got nuked'}</b>${nukeText(b)?`<div class="bquote">\u201c${esc(nukeText(b))}\u201d</div>`:''}<div class="s">Complaint by ${nameH(b.by)} hit 3 likes${b.immune?'':' \u00b7 lost '+fmt(b.lost||0)+' points'} \u00b7 ${since(b.t)}</div></div><div class="rt"><span class="tag ${b.immune?'y':'r'}">${b.immune?'IMMUNE':'NUKED'}</span></div></div>`;
   if(b.kind==='daily')return `<div class="card hist blast"><div><b>${nameH(b.user)} got wiped</b><div class="s">${since(b.t)}</div></div><div class="rt"><span class="tag r">WIPED</span></div></div>`;
   const wipe=b.kind==='wipe';
   return `<div class="card hist blast"><div><b>${nameH(b.user)} ${wipe?(b.lost>0?'lost all '+fmt(b.lost)+' points':'got their points wiped'):'left their clothes in '+b.mach}</b><div class="s">${wipe?b.mach+' \u00b7 30+ min late':'10+ min after the cycle ended'} \u00b7 ${since(b.t)}</div></div>
@@ -755,7 +756,7 @@ function alertsHTML(){
     else if(late<30)h+=`<div class="alert red"><b>You are being blasted.</b> Your clothes are still in ${m.name}. ${S.me===KING?'The crown keeps your points safe, but everyone can see it.':'All your points get wiped in '+Math.ceil(30-late)+' min.'} <a href="#machines">Go \u2192</a></div>`;
     else h+=`<div class="alert red"><b>Points wiped.</b> Your clothes are still in ${m.name}. <a href="#machines">Go \u2192</a></div>`;}
   const act=S.machines.filter(m=>m.user&&m.user!==S.me&&mstat(m)==='done'&&(now()-mend(m))/MIN>=10);
-  const nukes=S.blasts.filter(b=>b.kind==='nuke'&&now()-b.t<60*MIN).map(b=>`<span>${nameH(b.user,{upper:1})} ${b.immune?'SURVIVED (IMMUNE)':'GOT NUKED'}: \u201c${esc(b.text||'')}\u201d</span>`).join('');
+  const nukes=S.blasts.filter(b=>b.kind==='nuke'&&now()-b.t<60*MIN).map(b=>`<span>${nameH(b.user,{upper:1})} ${b.immune?'SURVIVED (IMMUNE)':'GOT NUKED'}${nukeText(b)?': \u201c'+esc(nukeText(b))+'\u201d':''}</span>`).join('');
   let items='';
   if(act.length)items+=act.map(m=>{const l=Math.floor((now()-mend(m))/MIN);return `<span>${nameH(m.user,{upper:1})} LEFT THEIR CLOTHES IN ${m.name.toUpperCase()} \u00b7 ${l} MIN${l>=30&&m.user!==KING?' \u00b7 POINTS WIPED':''}</span>`}).join('');
   items+=nukes;
