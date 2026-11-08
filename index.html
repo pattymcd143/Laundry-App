@@ -207,6 +207,23 @@ select:focus,input:focus{border-color:var(--cyan);box-shadow:0 0 12px rgba(46,24
 .ptsline{margin-top:20px;color:var(--muted);font-size:16px}.ptsline b{font-family:var(--mono);font-size:20px}
 .floater{position:fixed;pointer-events:none;font-family:var(--mono);font-weight:800;font-size:26px;color:var(--pink);text-shadow:0 0 10px var(--pink);animation:floatup .9s ease-out forwards;z-index:70}
 @keyframes floatup{to{transform:translateY(-80px);opacity:0}}
+.cform{padding:24px 26px}
+.cform h3{font-size:22px;letter-spacing:-.02em}
+.flabel{display:block;font-size:13px;font-weight:800;letter-spacing:.14em;color:var(--muted);text-transform:uppercase;margin:16px 0 8px}
+textarea{width:100%;background:#08080f;border:1px solid var(--line2);border-radius:10px;padding:14px;color:var(--text);font:inherit;font-size:16px;outline:none;resize:vertical}
+textarea:focus{border-color:var(--pink);box-shadow:0 0 12px rgba(255,47,214,.3)}
+.cfoot{display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:12px}
+.small{font-size:13px}
+.cmp{padding:20px 24px;margin-bottom:12px}
+.cmp.nuked{border-color:var(--red);box-shadow:0 0 22px rgba(255,59,92,.3)}
+.chead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:16px}
+.ctime{margin-left:auto}
+.ctext{margin:12px 0 16px;font-size:17px;line-height:1.5;color:#e6e6f8;white-space:pre-wrap;word-break:break-word}
+.cbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.likes{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:14px}
+.likes i{width:12px;height:12px;border-radius:50%;border:2px solid var(--line2);display:inline-block}
+.likes i.on{background:var(--red);border-color:var(--red);box-shadow:0 0 8px var(--red)}
+.likes span{margin-left:6px}
 /* tips */
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:28px 0 8px}
 .fchip{padding:9px 16px;border:1px solid var(--line2);border-radius:999px;font-weight:600;color:#ccd;background:#0b0b15}
@@ -368,7 +385,8 @@ const MIN=60000, now=()=>Date.now();
 const r2=n=>Math.round(n*100)/100;
 const fmt=n=>{const v=r2(n);return (Object.is(v,-0)?0:v).toLocaleString('en-US',{maximumFractionDigits:2})};
 const sgn=n=>n>0?'+'+fmt(n):n<0?'−'+fmt(-n):'0';
-const first=n=>n.split(' ')[0];
+const first=n=>String(n).split(' ')[0];
+const esc=x=>String(x==null?'':x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const rand=a=>a[Math.floor(Math.random()*a.length)];
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
 const todayKey=()=>{const d=new Date();return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()};
@@ -417,7 +435,7 @@ const TIPS=[
   ['Report broken machines','Mark it out of order on the board so nobody wastes a load on it.'],
   ['Leave it clean','Wipe up detergent spills and toss used dryer sheets in the trash.']]}
 ];
-const RULES=[['+2','g','Pick up within 10 min of your cycle ending'],['+1','g','Clean the lint trap after a dryer load'],['10m','r','10+ min late: you get blasted to the whole house'],['30m','r','30+ min late: ALL your points are wiped'],['\u00b1','y','Casino wins and losses']];
+const RULES=[['+2','g','Pick up within 10 min of your cycle ending'],['+1','g','Clean the lint trap after a dryer load'],['10m','r','10+ min late: you get blasted to the whole house'],['30m','r','30+ min late: ALL your points are wiped'],['3','r','A complaint about you gets 3 likes: ALL your points are nuked'],['\u00b1','y','Casino wins and losses']];
 
 /* ---------- state (shared via Firebase) ---------- */
 // Paste the Firebase web config here:
@@ -432,7 +450,7 @@ const FIREBASE_CONFIG={
 const MIDS=[1,2,3,4,5,6,7,8].map(n=>'w'+n).concat([1,2,3,4,5,6,7,8].map(n=>'d'+n));
 const mName=id=>(id[0]==='w'?'Washer ':'Dryer ')+id.slice(1);
 const mType=id=>id[0]==='w'?'washer':'dryer';
-let S={me:null,users:{},machines:[],blasts:[],daily:null,watched:{},clicks:{},casino:{}},UI={modal:null,tipcat:'All'};
+let S={me:null,users:{},machines:[],blasts:[],complaints:[],daily:null,watched:{},clicks:{},casino:{}},UI={modal:null,tipcat:'All'};
 BROS.forEach(b=>S.users[b]={pts:0,hist:[]});
 let READY=false,CONN_ERR='',NOTIFIED={};
 const LKEY='zbt-laundry-live-v1';
@@ -503,6 +521,18 @@ const DB=(()=>{
       tx.update(R.mach,fp('m',id,'wiped'),true);tx.update(R.pts,fp('p',user),0);
       tx.update(R.board,{blasts:F.arrayUnion({t,user,mach:mName(id),kind:'wipe',lost})});
       tx.set(F.doc(db,'hist',user),{h:F.arrayUnion({t,title:mName(id),sub:`Left clothes 30+ min. Lost all ${fmt(lost)} points`,d:-lost,tag:'WIPED',c:'r'})},{merge:true})})},
+    onComplaints(cb){const q=F.query(F.collection(db,'complaints'),F.orderBy('t','desc'),F.limit(60));return F.onSnapshot(q,sn=>cb(sn.docs.map(d=>Object.assign({id:d.id},d.data()))))},
+    addComplaint(by,target,text){return F.addDoc(F.collection(db,'complaints'),{t:Date.now(),by,target,text,likes:[],nuked:false,lost:0})},
+    async like(id,me){const ref=F.doc(db,'complaints',id);return F.runTransaction(db,async tx=>{const cs=await tx.get(ref);const pts=((await tx.get(R.pts)).data().p||{});
+      if(!cs.exists())return 'gone';const c=cs.data();const likes=c.likes||[];
+      if(likes.includes(me)||c.by===me||c.target===me)return 'no';
+      const nl=likes.concat([me]);
+      if(nl.length>=3&&!c.nuked){const lost=pts[c.target]||0,t=Date.now();
+        tx.update(ref,{likes:nl,nuked:true,lost});tx.update(R.pts,fp('p',c.target),0);
+        tx.update(R.board,{blasts:F.arrayUnion({t,user:c.target,kind:'nuke',lost,by:c.by})});
+        tx.set(F.doc(db,'hist',c.target),{h:F.arrayUnion({t,title:'Complaint',sub:`Complaint by ${c.by} hit 3 likes. Lost all ${fmt(lost)} points`,d:-lost,tag:'NUKED',c:'r'})},{merge:true});
+        return 'nuked'}
+      tx.update(ref,{likes:nl});return 'ok'})},
     async daily(date,picks,t){return F.runTransaction(db,async tx=>{const b=(await tx.get(R.board)).data()||{};const pts=((await tx.get(R.pts)).data().p||{});
       if(b.daily&&b.daily.date===date)return;
       tx.update(R.board,{daily:{date,picks},blasts:F.arrayUnion(...picks.map(user=>({t,user,kind:'daily'})))});
@@ -529,18 +559,20 @@ const IC={
  videos:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z"/>',
  tips:'<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
  standings:'<path d="M4 6h10M4 12h16M4 18h7"/>',
+ complaints:'<path d="M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1z"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/>',
  casino:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>'
 };
 const svg=k=>'<svg viewBox="0 0 24 24">'+IC[k]+'</svg>';
 
 /* ---------- routes ---------- */
-const NAV=[['home','Home'],['machines','Machines'],['videos','Videos'],['tips','Tips'],['standings','Standings'],['casino','Casino']];
+const NAV=[['home','Home'],['machines','Machines'],['videos','Videos'],['tips','Tips'],['standings','Standings'],['complaints','Complaints'],['casino','Casino']];
 const R={
  home:{head:()=>[greet()+', '+first(S.me),longDate()],view:vHome},
  machines:{head:()=>['Machines','Laundry room · 8 washers, 8 dryers'],view:vMachines},
  videos:{head:()=>['Videos','Watch before your next load'],view:vVideos},
  tips:{head:()=>['Tips','How not to ruin your clothes'],view:vTips},
  standings:{head:()=>['Standings','Fall 2026'],view:vStandings},
+ complaints:{head:()=>['Complaints','Call a brother out. 3 likes and his points are gone.'],view:vComplaints},
  casino:{head:()=>['Casino','The back room'],view:vCasino},
  blackjack:{head:()=>['Blackjack','The back room'],view:vBJ,nav:'casino'},
  roulette:{head:()=>['Roulette','The back room'],view:vRL,nav:'casino'},
@@ -625,9 +657,10 @@ function vHome(){
   ${hist.length?hist.map(histRow).join(''):'<div class="card empty">No points yet. Watch the video or start a load.</div>'}`;
 }
 function blastRow(b){
-  if(b.kind==='daily')return `<div class="card hist blast"><div><b>${b.user} got wiped</b><div class="s">${since(b.t)}</div></div><div class="rt"><span class="tag r">WIPED</span></div></div>`;
+  if(b.kind==='nuke')return `<div class="card hist blast"><div><b>${esc(b.user)} got nuked</b><div class="s">Complaint by ${esc(b.by)} hit 3 likes \u00b7 lost ${fmt(b.lost||0)} points \u00b7 ${since(b.t)}</div></div><div class="rt"><span class="tag r">NUKED</span></div></div>`;
+  if(b.kind==='daily')return `<div class="card hist blast"><div><b>${esc(b.user)} got wiped</b><div class="s">${since(b.t)}</div></div><div class="rt"><span class="tag r">WIPED</span></div></div>`;
   const wipe=b.kind==='wipe';
-  return `<div class="card hist blast"><div><b>${b.user} ${wipe?(b.lost>0?'lost all '+fmt(b.lost)+' points':'got their points wiped'):'left their clothes in '+b.mach}</b><div class="s">${wipe?b.mach+' \u00b7 30+ min late':'10+ min after the cycle ended'} \u00b7 ${since(b.t)}</div></div>
+  return `<div class="card hist blast"><div><b>${esc(b.user)} ${wipe?(b.lost>0?'lost all '+fmt(b.lost)+' points':'got their points wiped'):'left their clothes in '+b.mach}</b><div class="s">${wipe?b.mach+' \u00b7 30+ min late':'10+ min after the cycle ended'} \u00b7 ${since(b.t)}</div></div>
    <div class="rt"><span class="tag r">${wipe?'WIPED':'BLASTED'}</span></div></div>`;
 }
 function histRow(h){
@@ -748,6 +781,30 @@ function vStandings(){
   <div class="two"><div class="card" style="overflow:hidden">${arr.map((b,i)=>`<div class="srow ${b===S.me?'me':''}"><span class="rank">${String(i+1).padStart(2,'0')}</span><span class="nm">${b}${b===S.me?' <span class="tag b" style="margin-left:8px">YOU</span>':''}</span><span class="pt">${fmt(S.users[b].pts)}</span></div>`).join('')}</div>
   <div class="card rules"><h3>How points work</h3>${RULES.map(([p,c,t])=>`<div class="rule"><b class="${c}">${p}</b><span>${t}</span></div>`).join('')}</div></div>`;
 }
+
+/* ---------- complaints ---------- */
+function vComplaints(){
+  const opts=BROS.filter(b=>b!==S.me).map(b=>`<option>${esc(b)}</option>`).join('');
+  return `<div class="card cform"><h3>File a complaint</h3>
+   <label class="flabel" for="ctarget">Who</label><select id="ctarget"><option value="">Pick a brother</option>${opts}</select>
+   <label class="flabel" for="ctext">What did he do?</label><textarea id="ctext" maxlength="280" rows="3" placeholder="Left wet towels in Dryer 4 for 2 hours..."></textarea>
+   <div class="cfoot"><span id="ccount2" class="m">0/280</span><button class="btn pink" data-act="cpost">Post complaint</button></div></div>
+  <div class="section-h">Public complaints <span class="count" id="cnum">${S.complaints.length}</span></div>
+  <div id="clist">${clistHTML()}</div>`;
+}
+function clistHTML(){
+  if(!S.complaints.length)return '<div class="card empty">No complaints yet. Suspicious.</div>';
+  return S.complaints.map(c=>{const likes=c.likes||[],n=likes.length,mine=c.by===S.me,isT=c.target===S.me,liked=likes.includes(S.me);
+    const btn=c.nuked?`<span class="tag r">NUKED \u00b7 ${fmt(c.lost||0)} POINTS GONE</span>`
+      :isT?`<span class="m small">You can\u2019t like a complaint about you</span>`
+      :mine?`<span class="m small">Your complaint</span>`
+      :liked?`<button class="btn ghost sm" disabled>Liked</button>`
+      :`<button class="btn sm" data-act="clike" data-id="${esc(c.id)}">Agree +1</button>`;
+    return `<div class="card cmp ${c.nuked?'nuked':''}"><div class="chead"><span class="tag p">CHALLENGE</span><span><b>${esc(c.by)}</b> <span class="m">vs</span> <b class="neon-r">${esc(c.target)}</b></span><span class="m small ctime">${since(c.t)}</span></div>
+     <p class="ctext">${esc(c.text)}</p>
+     <div class="cbar"><div class="likes">${[0,1,2].map(i=>`<i class="${i<n?'on':''}"></i>`).join('')}<span>${Math.min(n,3)}/3 likes${n?' \u00b7 '+likes.map(x=>esc(first(x))).join(', '):''}</span></div>${btn}</div></div>`}).join('');
+}
+function refreshComplaints(){if(route()!=='complaints')return;const l=$('#clist'),n=$('#cnum');if(l)l.innerHTML=clistHTML();if(n)n.textContent=S.complaints.length}
 
 /* ---------- casino core ---------- */
 const LIM={bj:200,rl:200,sl:300,pk:50};
@@ -983,6 +1040,10 @@ const ACT={
   el.classList.remove('bump');void el.offsetWidth;el.classList.add('bump');
   const r=el.getBoundingClientRect(),x=e&&e.clientX?e.clientX:r.left+r.width/2,y=e&&e.clientY?e.clientY:r.top;
   const f=document.createElement('div');f.className='floater';f.textContent='+1';f.style.left=(x-14+(Math.random()*30-15))+'px';f.style.top=(y-30)+'px';document.body.appendChild(f);setTimeout(()=>f.remove(),900)},
+ cpost(el){const t=$('#ctarget').value,x=$('#ctext').value.trim();
+  if(!BROS.includes(t)||t===S.me){toast('Pick a brother.');return}if(x.length<3){toast('Say what he did.');return}
+  el.disabled=true;DB.addComplaint(S.me,t,x.slice(0,280)).then(()=>{$('#ctext').value='';$('#ctarget').value='';$('#ccount2').textContent='0/280';toast(`Complaint posted. 3 likes and ${first(t)} is done.`)}).catch(e=>{console.error(e);toast('Could not post. Try again.')}).finally(()=>{el.disabled=false})},
+ clike(el){el.disabled=true;DB.like(el.dataset.id,S.me).then(r=>{if(r==='nuked')toast('That was the 3rd like. Points nuked.');}).catch(e=>{console.error(e);toast('Could not like. Try again.');el.disabled=false})},
  tipcat(el){UI.tipcat=el.dataset.c;render()},
  bjbet(el){BJ.bet=+el.dataset.v;render()},
  bjdeal(){if(!stake('bj',BJ.bet))return;BJ.stake=BJ.bet;BJ.p=[draw(),draw()];BJ.d=[draw(),draw()];BJ.msg='';BJ.cls='';BJ.phase='play';
@@ -1028,6 +1089,7 @@ document.addEventListener('submit',async e=>{if(e.target.id!=='loginf')return;e.
   if(r==='bad'){$('#lerr').textContent='Wrong PIN for '+first(name)+'.';btn.disabled=false;return}
   S.me=name;save();subscribeMe();if(location.hash&&location.hash!=='#home')location.hash='';render();if(r==='new')toast('PIN set. Use it next time.')});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&UI.modal)closeModal()});
+document.addEventListener('input',e=>{if(e.target.id==='ctext'){const c=$('#ccount2');if(c)c.textContent=e.target.value.length+'/280'}});
 window.addEventListener('hashchange',()=>{closeModal();render();window.scrollTo(0,0)});
 
 /* ---------- ticker ---------- */
@@ -1055,6 +1117,9 @@ async function boot(){
   let gotM=false,gotB=false;
   const ready=()=>{if(READY||!gotM||!gotB)return;READY=true;if(S.me)subscribeMe();else pollPts();render()};
   DB.onMachines(d=>{const mm=d.m||{};S.machines=MIDS.map(id=>Object.assign({id,type:mType(id),name:mName(id),user:null,start:0,dur:0},mm[id]||{}));gotM=true;ready();if(READY){enforce();softRefresh()}});
+  DB.onComplaints(list=>{S.complaints=list;
+    if(S.me)for(const c of list){if(c.target===S.me&&c.nuked&&!NOTIFIED['nk'+c.id]){NOTIFIED['nk'+c.id]=1;save();toast('A complaint about you hit 3 likes. Points nuked.');pollPts()}}
+    refreshComplaints()});
   DB.onBoard(d=>{S.blasts=(d.blasts||[]).slice().sort((a,b)=>b.t-a.t);S.daily=d.daily?d.daily.date:null;S.dailyPicks=d.daily?d.daily.picks:null;gotB=true;ready();if(READY)softRefresh()});
 }
 boot();
