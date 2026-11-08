@@ -224,6 +224,10 @@ textarea:focus{border-color:var(--pink);box-shadow:0 0 12px rgba(255,47,214,.3)}
 .likes i{width:12px;height:12px;border-radius:50%;border:2px solid var(--line2);display:inline-block}
 .likes i.on{background:var(--red);border-color:var(--red);box-shadow:0 0 8px var(--red)}
 .likes span{margin-left:6px}
+.nmw{white-space:nowrap}
+.royal{color:var(--gold)!important;font-style:italic;font-weight:900;font-size:1.25em;text-shadow:0 0 8px rgba(255,210,63,.75),0 0 18px rgba(255,210,63,.35);-webkit-text-fill-color:var(--gold)}
+.crown{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:5px;filter:drop-shadow(0 0 4px rgba(255,210,63,.9))}
+.vcheck{width:.95em;height:.95em;vertical-align:-.12em;margin-left:5px;filter:drop-shadow(0 0 3px rgba(29,155,240,.7))}
 /* tips */
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:28px 0 8px}
 .fchip{padding:9px 16px;border:1px solid var(--line2);border-radius:999px;font-weight:600;color:#ccd;background:#0b0b15}
@@ -250,7 +254,7 @@ textarea:focus{border-color:var(--pink);box-shadow:0 0 12px rgba(255,47,214,.3)}
 .srow:first-child{border-top:0}
 .srow.me{background:rgba(46,242,255,.06);box-shadow:inset 3px 0 0 var(--cyan)}
 .srow .rank{font-family:var(--mono);color:var(--muted);font-weight:800}
-.srow .nm{font-weight:600;font-size:16px}
+.srow .nm{font-weight:600;font-size:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .srow .pt{font-family:var(--mono);font-weight:800;font-size:17px}
 .two{display:grid;grid-template-columns:1.4fr 1fr;gap:18px;align-items:start}
 .rules{padding:24px 26px}
@@ -386,6 +390,13 @@ const r2=n=>Math.round(n*100)/100;
 const fmt=n=>{const v=r2(n);return (Object.is(v,-0)?0:v).toLocaleString('en-US',{maximumFractionDigits:2})};
 const sgn=n=>n>0?'+'+fmt(n):n<0?'−'+fmt(-n):'0';
 const first=n=>String(n).split(' ')[0];
+const KING='Brendan Zamota',VERIFY_AT=1000;
+const CROWN='<svg class="crown" viewBox="0 0 24 24" aria-label="crown"><path fill="#ffd23f" d="M3 18h18l1-11-5.5 4L12 4 7.5 11 2 7z"/><rect x="3" y="19.5" width="18" height="2.2" rx="1" fill="#ffd23f"/></svg>';
+const VCHECK='<svg class="vcheck" viewBox="0 0 24 24" aria-label="verified"><path fill="#1d9bf0" d="M12 1l2.6 2.2 3.4-.4.9 3.3 3 1.7-1.2 3.2 1.2 3.2-3 1.7-.9 3.3-3.4-.4L12 23l-2.6-2.2-3.4.4-.9-3.3-3-1.7L3.3 13 2.1 9.8l3-1.7.9-3.3 3.4.4z"/><path fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M7.5 12.3l3 3 6-6.3"/></svg>';
+const isVerified=n=>!!(S&&S.users&&S.users[n]&&S.users[n].pts>=VERIFY_AT);
+function nameH(n,o){o=o||{};let t=o.first?first(n):String(n);if(o.upper)t=t.toUpperCase();const k=n===KING;
+  return `<span class="nmw${k?' royal':''}">${k?CROWN:''}${esc(t)}${isVerified(n)?VCHECK:''}</span>`}
+const optLabel=n=>(n===KING?'\u265B ':'')+n+(isVerified(n)?' \u2714':'');
 const esc=x=>String(x==null?'':x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const rand=a=>a[Math.floor(Math.random()*a.length)];
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
@@ -567,7 +578,7 @@ const svg=k=>'<svg viewBox="0 0 24 24">'+IC[k]+'</svg>';
 /* ---------- routes ---------- */
 const NAV=[['home','Home'],['machines','Machines'],['videos','Videos'],['tips','Tips'],['standings','Standings'],['complaints','Complaints'],['casino','Casino']];
 const R={
- home:{head:()=>[greet()+', '+first(S.me),longDate()],view:vHome},
+ home:{head:()=>[greet()+', '+nameH(S.me,{first:1}),longDate()],view:vHome},
  machines:{head:()=>['Machines','Laundry room · 8 washers, 8 dryers'],view:vMachines},
  videos:{head:()=>['Videos','Watch before your next load'],view:vVideos},
  tips:{head:()=>['Tips','How not to ruin your clothes'],view:vTips},
@@ -595,7 +606,7 @@ function render(){
    </aside>
    <main class="main">
     <header class="top"><div><h1>${title}</h1><p>${sub}</p></div>
-     <div class="top-r"><span class="chip-btn">${S.me}</span><button class="chip-btn strong" data-act="signout">Sign out</button></div></header>
+     <div class="top-r"><span class="chip-btn">${nameH(S.me)}</span><button class="chip-btn strong" data-act="signout">Sign out</button></div></header>
     <div id="alerts">${alertsHTML()}</div><div class="content">${def.view()}</div>
    </main></div>`;
   sig=msig();lastAlerts=alertsHTML();tick();
@@ -608,7 +619,7 @@ function vLogin(){
    <h1 class="big-title" style="margin-top:22px">The <span class="neon-c">Laundry</span> <span class="neon-p">App</span></h1>
    <p style="color:var(--muted)">Sign in to start loads, earn points and hit the casino.</p>
    <label for="lname">Name</label>
-   <select id="lname">${BROS.map(b=>`<option${b==='Patrick McDermott'?' selected':''}>${b}</option>`).join('')}</select>
+   <select id="lname">${BROS.map(b=>`<option value="${esc(b)}"${b==='Patrick McDermott'?' selected':''}>${esc(optLabel(b))}</option>`).join('')}</select>
    <label for="lpin">PIN</label>
    <input id="lpin" type="password" inputmode="numeric" maxlength="4" placeholder="4 digits" autocomplete="off">
    <div class="err" id="lerr"></div>
@@ -657,10 +668,10 @@ function vHome(){
   ${hist.length?hist.map(histRow).join(''):'<div class="card empty">No points yet. Watch the video or start a load.</div>'}`;
 }
 function blastRow(b){
-  if(b.kind==='nuke')return `<div class="card hist blast"><div><b>${esc(b.user)} got nuked</b><div class="s">Complaint by ${esc(b.by)} hit 3 likes \u00b7 lost ${fmt(b.lost||0)} points \u00b7 ${since(b.t)}</div></div><div class="rt"><span class="tag r">NUKED</span></div></div>`;
-  if(b.kind==='daily')return `<div class="card hist blast"><div><b>${esc(b.user)} got wiped</b><div class="s">${since(b.t)}</div></div><div class="rt"><span class="tag r">WIPED</span></div></div>`;
+  if(b.kind==='nuke')return `<div class="card hist blast"><div><b>${nameH(b.user)} got nuked</b><div class="s">Complaint by ${nameH(b.by)} hit 3 likes \u00b7 lost ${fmt(b.lost||0)} points \u00b7 ${since(b.t)}</div></div><div class="rt"><span class="tag r">NUKED</span></div></div>`;
+  if(b.kind==='daily')return `<div class="card hist blast"><div><b>${nameH(b.user)} got wiped</b><div class="s">${since(b.t)}</div></div><div class="rt"><span class="tag r">WIPED</span></div></div>`;
   const wipe=b.kind==='wipe';
-  return `<div class="card hist blast"><div><b>${esc(b.user)} ${wipe?(b.lost>0?'lost all '+fmt(b.lost)+' points':'got their points wiped'):'left their clothes in '+b.mach}</b><div class="s">${wipe?b.mach+' \u00b7 30+ min late':'10+ min after the cycle ended'} \u00b7 ${since(b.t)}</div></div>
+  return `<div class="card hist blast"><div><b>${nameH(b.user)} ${wipe?(b.lost>0?'lost all '+fmt(b.lost)+' points':'got their points wiped'):'left their clothes in '+b.mach}</b><div class="s">${wipe?b.mach+' \u00b7 30+ min late':'10+ min after the cycle ended'} \u00b7 ${since(b.t)}</div></div>
    <div class="rt"><span class="tag r">${wipe?'WIPED':'BLASTED'}</span></div></div>`;
 }
 function histRow(h){
@@ -681,13 +692,13 @@ function mCard(m){
   const st=mstat(m),mine=m.user===S.me;let badge,line,sub='',acts='',bar='',late=0;
   if(st==='free'){badge='<span class="tag g">OPEN</span>';line='Ready';sub='Nobody on it';
     acts=`<button class="btn sm" data-act="start" data-id="${m.id}">Use it \u00b7 ${DUR[m.type]} min</button><button class="link" data-act="report" data-id="${m.id}">Report a problem</button>`;}
-  else if(st==='running'){badge='<span class="tag b">RUNNING</span>';line=`<span data-end="${mend(m)}">${cd(mend(m))}</span>`;sub=mine?'You':m.user;
+  else if(st==='running'){badge='<span class="tag b">RUNNING</span>';line=`<span data-end="${mend(m)}">${cd(mend(m))}</span>`;sub=mine?'You':nameH(m.user);
     bar=`<div class="bar"><i data-prog="${m.start},${mend(m)}"></i></div>`;
 }
   else if(st==='done'){late=(now()-mend(m))/MIN;
     badge=late>=30?'<span class="tag r">WIPED</span>':late>=10?'<span class="tag r">BLASTED</span>':'<span class="tag y">DONE</span>';
     line=`Done <span data-since="${mend(m)}">${since(mend(m))}</span>`;
-    sub=(mine?'Your':m.user+'\u2019s')+' clothes are waiting';
+    sub=(mine?'Your':nameH(m.user)+'\u2019s')+' clothes are waiting';
     acts=mine?`<button class="btn pink sm" data-act="pickup" data-id="${m.id}">I picked it up</button>`
       :late>=10?`<button class="btn ghost sm" data-act="moved" data-id="${m.id}">I moved their clothes</button>`:'';}
   else{badge='<span class="tag r">OUT OF ORDER</span>';line='Out of order';sub='Reported to the house manager';
@@ -733,7 +744,7 @@ function alertsHTML(){
     else if(late<30)h+=`<div class="alert red"><b>You are being blasted.</b> Your clothes are still in ${m.name}. All your points get wiped in ${Math.ceil(30-late)+' min'}. <a href="#machines">Go \u2192</a></div>`;
     else h+=`<div class="alert red"><b>Points wiped.</b> Your clothes are still in ${m.name}. <a href="#machines">Go \u2192</a></div>`;}
   const act=S.machines.filter(m=>m.user&&m.user!==S.me&&mstat(m)==='done'&&(now()-mend(m))/MIN>=10);
-  if(act.length){const items=act.map(m=>{const l=Math.floor((now()-mend(m))/MIN);return `<span>${m.user.toUpperCase()} LEFT THEIR CLOTHES IN ${m.name.toUpperCase()} \u00b7 ${l} MIN${l>=30?' \u00b7 POINTS WIPED':''}</span>`}).join('');
+  if(act.length){const items=act.map(m=>{const l=Math.floor((now()-mend(m))/MIN);return `<span>${nameH(m.user,{upper:1})} LEFT THEIR CLOTHES IN ${m.name.toUpperCase()} \u00b7 ${l} MIN${l>=30?' \u00b7 POINTS WIPED':''}</span>`}).join('');
     h+=`<div class="ticker"><b>BLAST</b><div class="tk"><div class="tk-in">${items}${items}</div></div></div>`}
   return h;
 }
@@ -777,14 +788,14 @@ function vTips(){
 function vStandings(){
   const arr=BROS.slice().sort((a,b)=>S.users[b].pts-S.users[a].pts);
   const top=arr.slice(0,3),cls=['p1','p2','p3'],lab=['1ST','2ND','3RD'],nc=['neon-y','neon-c','neon-p'];
-  return `<div class="podium">${top.map((b,i)=>`<div class="card pod ${cls[i]}"><div class="place ${nc[i]}">${lab[i]} PLACE</div><div class="nm">${b}</div><div class="pts">${fmt(S.users[b].pts)} points</div></div>`).join('')}</div>
-  <div class="two"><div class="card" style="overflow:hidden">${arr.map((b,i)=>`<div class="srow ${b===S.me?'me':''}"><span class="rank">${String(i+1).padStart(2,'0')}</span><span class="nm">${b}${b===S.me?' <span class="tag b" style="margin-left:8px">YOU</span>':''}</span><span class="pt">${fmt(S.users[b].pts)}</span></div>`).join('')}</div>
+  return `<div class="podium">${top.map((b,i)=>`<div class="card pod ${cls[i]}"><div class="place ${nc[i]}">${lab[i]} PLACE</div><div class="nm">${nameH(b)}</div><div class="pts">${fmt(S.users[b].pts)} points</div></div>`).join('')}</div>
+  <div class="two"><div class="card" style="overflow:hidden">${arr.map((b,i)=>`<div class="srow ${b===S.me?'me':''}"><span class="rank">${String(i+1).padStart(2,'0')}</span><span class="nm">${nameH(b)}${b===S.me?' <span class="tag b" style="margin-left:8px">YOU</span>':''}</span><span class="pt">${fmt(S.users[b].pts)}</span></div>`).join('')}</div>
   <div class="card rules"><h3>How points work</h3>${RULES.map(([p,c,t])=>`<div class="rule"><b class="${c}">${p}</b><span>${t}</span></div>`).join('')}</div></div>`;
 }
 
 /* ---------- complaints ---------- */
 function vComplaints(){
-  const opts=BROS.filter(b=>b!==S.me).map(b=>`<option>${esc(b)}</option>`).join('');
+  const opts=BROS.filter(b=>b!==S.me).map(b=>`<option value="${esc(b)}">${esc(optLabel(b))}</option>`).join('');
   return `<div class="card cform"><h3>File a complaint</h3>
    <label class="flabel" for="ctarget">Who</label><select id="ctarget"><option value="">Pick a brother</option>${opts}</select>
    <label class="flabel" for="ctext">What did he do?</label><textarea id="ctext" maxlength="280" rows="3" placeholder="Left wet towels in Dryer 4 for 2 hours..."></textarea>
@@ -800,9 +811,9 @@ function clistHTML(){
       :mine?`<span class="m small">Your complaint</span>`
       :liked?`<button class="btn ghost sm" disabled>Liked</button>`
       :`<button class="btn sm" data-act="clike" data-id="${esc(c.id)}">Agree +1</button>`;
-    return `<div class="card cmp ${c.nuked?'nuked':''}"><div class="chead"><span class="tag p">CHALLENGE</span><span><b>${esc(c.by)}</b> <span class="m">vs</span> <b class="neon-r">${esc(c.target)}</b></span><span class="m small ctime">${since(c.t)}</span></div>
+    return `<div class="card cmp ${c.nuked?'nuked':''}"><div class="chead"><span class="tag p">CHALLENGE</span><span><b>${nameH(c.by)}</b> <span class="m">vs</span> <b class="neon-r">${nameH(c.target)}</b></span><span class="m small ctime">${since(c.t)}</span></div>
      <p class="ctext">${esc(c.text)}</p>
-     <div class="cbar"><div class="likes">${[0,1,2].map(i=>`<i class="${i<n?'on':''}"></i>`).join('')}<span>${Math.min(n,3)}/3 likes${n?' \u00b7 '+likes.map(x=>esc(first(x))).join(', '):''}</span></div>${btn}</div></div>`}).join('');
+     <div class="cbar"><div class="likes">${[0,1,2].map(i=>`<i class="${i<n?'on':''}"></i>`).join('')}<span>${Math.min(n,3)}/3 likes${n?' \u00b7 '+likes.map(x=>nameH(x,{first:1})).join(', '):''}</span></div>${btn}</div></div>`}).join('');
 }
 function refreshComplaints(){if(route()!=='complaints')return;const l=$('#clist'),n=$('#cnum');if(l)l.innerHTML=clistHTML();if(n)n.textContent=S.complaints.length}
 
@@ -1000,7 +1011,7 @@ function vPK(){
   }
   const me=pkMe(),done=PK.phase==='done',u=U();
   const seats=PK.players.filter(p=>!p.me).map(p=>{const show=done&&!p.folded;const wn=done&&PK.winners.includes(p.name);
-    return `<div class="seat ${p.folded?'folded':''} ${wn?'win':''}"><div class="nm">${first(p.name)}</div><div class="hand">${p.cards.map(x=>cardH(x,!show,'sm')).join('')}</div>
+    return `<div class="seat ${p.folded?'folded':''} ${wn?'win':''}"><div class="nm">${nameH(p.name,{first:1})}</div><div class="hand">${p.cards.map(x=>cardH(x,!show,'sm')).join('')}</div>
      <div class="pt2">${p.folded?'FOLDED':'IN '+fmt(p.put)}${show&&PK.board.length===5?' · '+HN[best(p.cards.concat(PK.board)).cat]:''}</div></div>`}).join('');
   const boardH=[0,1,2,3,4].map(i=>cardH(PK.board[i])).join('');
   const myBest=me.folded?'Folded':PK.board.length>=3?HN[best(me.cards.concat(PK.board)).cat]:(me.cards[0].r===me.cards[1].r?'Pocket pair':'High card');
